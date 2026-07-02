@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">
+  <title>HiggTable</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <nav id="tabs">
+      <button class="tab active" data-table="VCP Creatives">VCP</button>
+      <button class="tab" data-table="PLM Creatives">PLM</button>
+      <button class="tab" data-table="CMC Creatives">CMC</button>
+      <button class="tab" data-table="LB Creatives">LB</button>
+    </nav>
+    <div id="controls">
+      <div id="status-filters"></div>
+      <div id="des-control">
+        <span>You:</span>
+        <select id="des-select"><option value="">All</option></select>
+      </div>
+      <button id="settings-btn" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <main id="records-container"><p class="empty">Enter your API key to get started.</p></main>
+
+  <div id="rename-panel" class="hidden">
+    <div id="rename-header">
+      <span id="rename-task-label">Task: <strong id="rename-task-name">—</strong></span>
+      <button id="rename-panel-close" title="Close">×</button>
+    </div>
+    <div id="drop-zone">
+      Drop files here or <button id="browse-files-btn">browse</button>
+    </div>
+    <div id="file-list"></div>
+    <div id="rename-footer" class="hidden">
+      <span id="rename-warning"></span>
+      <button id="clear-files-btn">Clear</button>
+      <button id="rename-btn" class="primary">Rename Files</button>
+    </div>
+  </div>
+
+  <footer id="statusbar">Connecting to Airtable...</footer>
+
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h2>Airtable API Key</h2>
+      <p>Enter your Personal Access Token (pat...):</p>
+      <input type="password" id="api-key-input" placeholder="patXXXXXXXXXXXXXX.XXXXXXXXX...">
+      <div class="modal-actions">
+        <button id="settings-save-btn" class="primary">Save</button>
+        <button id="settings-cancel-btn">Cancel</button>
+      </div>
+      <p class="hint">airtable.com → Account → Developer hub → Personal access tokens</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
