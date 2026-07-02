@@ -125,11 +125,13 @@ table.dash-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px
 table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); background: var(--bg-surface-2); color: var(--text-secondary); font-weight: bold; }
 .dash-rank { color: var(--text-muted); width: 24px; }
 .dash-name { color: var(--text-primary); font-weight: bold; }
-.dash-bar-cell { min-width: 200px; }
+.dash-bar-cell { width: 45%; min-width: 200px; }
 .dash-bar-track { background: var(--bg-surface-2); border-radius: 999px; height: 14px; overflow: hidden; position: relative; }
 .dash-bar-fill { background: linear-gradient(90deg, var(--accent), var(--accent-strong)); height: 100%; border-radius: 999px; }
 .dash-bar-label { position: absolute; right: var(--space-2); top: 0; font-size: 10px; line-height: 14px; color: var(--text-primary); }
-.dash-type-count { color: var(--text-secondary); text-align: right; }
+.dash-type-header, .dash-type-count { width: 56px; text-align: center; border-left: 1px solid var(--border); }
+.dash-type-count { color: var(--text-secondary); }
+.dash-type-count.zero { color: var(--text-muted); }
 
 /* ── Settings modal ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; }
