@@ -2,9 +2,41 @@
 const BASE_URL = 'https://api.airtable.com/v0';
 const noop = () => {};
 
+// Airtable allows ~5 requests/sec per base. Fetching multiple tables fully
+// unbounded-in-parallel (tried once before) burst past that and caused 429
+// storms. This caps how many requests can be in flight at once — bounded
+// parallelism, not unbounded — so e.g. 3-4 tables can each make progress on
+// their own pagination concurrently without ever exceeding the real limit.
+const MAX_CONCURRENT_REQUESTS = 3;
+let activeRequests = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+    activeRequests++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => waitQueue.push(resolve));
+}
+
+function releaseSlot() {
+  activeRequests--;
+  const next = waitQueue.shift();
+  if (next) { activeRequests++; next(); }
+}
+
+async function throttledFetch(url, options) {
+  await acquireSlot();
+  try {
+    return await fetch(url, options);
+  } finally {
+    releaseSlot();
+  }
+}
+
 async function get(url, apiKey, logger = noop, attempt = 0) {
   const t0 = Date.now();
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  const res = await throttledFetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
   if (res.status === 429 && attempt < 5) {
     const retryAfter = Number(res.headers?.get?.('Retry-After')) || attempt + 1;
     logger(`rate limited (429) on ${url} — retrying in ${retryAfter}s (attempt ${attempt + 1}/5)`);
@@ -46,7 +78,7 @@ async function fetchRecords(apiKey, baseId, tableId, logger = noop, onPage = noo
 async function uploadAttachment(apiKey, baseId, recordId, fieldName, filename, contentType, base64Data, logger = noop) {
   const url = `https://content.airtable.com/v0/${baseId}/${recordId}/${encodeURIComponent(fieldName)}/uploadAttachment`;
   const t0 = Date.now();
-  const res = await fetch(url, {
+  const res = await throttledFetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ contentType, file: base64Data, filename }),
@@ -62,7 +94,7 @@ async function uploadAttachment(apiKey, baseId, recordId, fieldName, filename, c
 async function updateRecord(apiKey, baseId, tableId, recordId, fields, logger = noop) {
   const url = `${BASE_URL}/${baseId}/${tableId}/${recordId}`;
   const t0 = Date.now();
-  const res = await fetch(url, {
+  const res = await throttledFetch(url, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields }),
@@ -89,7 +121,7 @@ async function updateRecords(apiKey, baseId, tableId, records, logger = noop) {
 async function patchRecordsChunk(apiKey, baseId, tableId, records, logger, attempt = 0) {
   const url = `${BASE_URL}/${baseId}/${tableId}`;
   const t0 = Date.now();
-  const res = await fetch(url, {
+  const res = await throttledFetch(url, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ records }),

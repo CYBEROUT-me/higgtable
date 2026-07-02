@@ -263,12 +263,16 @@ async function refreshTableData(name) {
 }
 
 async function preloadOtherTables() {
-  // Sequential on purpose: each table paginates internally, and firing all
-  // of them at once can burst past Airtable's per-base rate limit.
-  for (const name of TARGET_TABLES) {
-    if (name === state.activeTable || recordsCache[name] || tablesInFlight.has(name)) continue;
+  // Runs concurrently across tables — airtable.js now caps actual in-flight
+  // HTTP requests network-wide (see MAX_CONCURRENT_REQUESTS), so multiple
+  // tables can each make progress on their own pagination at once without
+  // bursting past Airtable's per-base rate limit. This used to be a
+  // sequential for-loop for that exact safety reason; the limiter now lives
+  // one layer down, so several tables loading side by side is safe.
+  const names = TARGET_TABLES.filter(name => name !== state.activeTable && !recordsCache[name] && !tablesInFlight.has(name));
+  await Promise.all(names.map(async name => {
     const info = state.tables[name];
-    if (!info) continue;
+    if (!info) return;
     const t0 = Date.now();
     tablesInFlight.add(name);
     try {
@@ -280,7 +284,7 @@ async function preloadOtherTables() {
     } finally {
       tablesInFlight.delete(name);
     }
-  }
+  }));
 }
 
 // ── Auto-refresh & notifications ──────────────────────────────────────────
@@ -318,41 +322,45 @@ async function pollForUpdates() {
 }
 
 async function pollAllTables() {
-  for (const name of TARGET_TABLES) {
-    const info = state.tables[name];
-    if (!info) continue;
-    if (tablesInFlight.has(name)) {
-      log(`pollAllTables: ${name} — skipped, a fetch is already in progress elsewhere`);
-      continue;
-    }
-    let fresh;
-    const t0 = Date.now();
-    tablesInFlight.add(name);
-    try {
-      fresh = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
-      log(`pollAllTables: ${name} — ${fresh.length} records in ${Date.now() - t0}ms`);
-    } catch (err) {
-      log(`pollAllTables: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
-      continue; // leave cache/seen set untouched; retry next cycle
-    } finally {
-      tablesInFlight.delete(name);
-    }
+  // Runs concurrently across tables — see preloadOtherTables for why this
+  // is safe (airtable.js caps real in-flight HTTP requests network-wide).
+  await Promise.all(TARGET_TABLES.map(name => pollOneTable(name)));
+}
 
-    const prevSeen = seenTaskIds[name];
-    if (prevSeen && state.selectedDES) {
-      fresh
-        .filter(r => !prevSeen.has(r.id) && (r.fields['DES'] || '') === state.selectedDES)
-        .forEach(r => notifyNewTask(r, name));
-    }
-    seenTaskIds[name] = new Set(fresh.map(r => r.id));
-    recordsCache[name] = fresh;
-    maybeRefreshDashboard();
+async function pollOneTable(name) {
+  const info = state.tables[name];
+  if (!info) return;
+  if (tablesInFlight.has(name)) {
+    log(`pollAllTables: ${name} — skipped, a fetch is already in progress elsewhere`);
+    return;
+  }
+  let fresh;
+  const t0 = Date.now();
+  tablesInFlight.add(name);
+  try {
+    fresh = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+    log(`pollAllTables: ${name} — ${fresh.length} records in ${Date.now() - t0}ms`);
+  } catch (err) {
+    log(`pollAllTables: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    return; // leave cache/seen set untouched; retry next cycle
+  } finally {
+    tablesInFlight.delete(name);
+  }
 
-    if (state.activeTable === name) {
-      state.records = fresh;
-      refreshDES();
-      render();
-    }
+  const prevSeen = seenTaskIds[name];
+  if (prevSeen && state.selectedDES) {
+    fresh
+      .filter(r => !prevSeen.has(r.id) && (r.fields['DES'] || '') === state.selectedDES)
+      .forEach(r => notifyNewTask(r, name));
+  }
+  seenTaskIds[name] = new Set(fresh.map(r => r.id));
+  recordsCache[name] = fresh;
+  maybeRefreshDashboard();
+
+  if (state.activeTable === name) {
+    state.records = fresh;
+    refreshDES();
+    render();
   }
 }
 

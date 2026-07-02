@@ -3,3 +3,4 @@ dist/
 config.js
 .DS_Store
 .superpowers/
+.claude/
