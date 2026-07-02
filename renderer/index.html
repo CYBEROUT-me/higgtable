@@ -13,6 +13,7 @@
       <button class="tab" data-table="PLM Creatives">PLM</button>
       <button class="tab" data-table="CMC Creatives">CMC</button>
       <button class="tab" data-table="LB Creatives">LB</button>
+      <button id="dashboard-btn" class="tab" title="Task completion dashboard">📊 Dashboard</button>
     </nav>
     <div id="controls">
       <div id="status-filters"></div>
@@ -20,11 +21,32 @@
         <span>You:</span>
         <select id="des-select"><option value="">All</option></select>
       </div>
+      <button id="refresh-btn" title="Refresh current table">⟳</button>
       <button id="settings-btn" title="Settings">⚙</button>
     </div>
   </header>
 
+  <div id="progress-bar"><div id="progress-bar-fill"></div></div>
+
   <main id="records-container"><p class="empty">Enter your API key to get started.</p></main>
+  <div id="dashboard-container" class="hidden">
+    <div id="dashboard-controls">
+      <span class="dash-controls-label">Period:</span>
+      <button class="dash-preset" data-preset="week">This week</button>
+      <button class="dash-preset" data-preset="lastWeek">Last week</button>
+      <button class="dash-preset" data-preset="month">This month</button>
+      <button class="dash-preset" data-preset="prevMonth">Previous month</button>
+      <button class="dash-preset" data-preset="all">All time</button>
+      <button class="dash-preset" data-preset="custom">Custom</button>
+      <span id="dashboard-custom-range" class="hidden">
+        <input type="date" id="dashboard-from">
+        <span>–</span>
+        <input type="date" id="dashboard-to">
+      </span>
+      <span id="dashboard-range-label"></span>
+    </div>
+    <div id="dashboard-table-area"></div>
+  </div>
 
   <div id="rename-panel" class="hidden">
     <div id="rename-header">

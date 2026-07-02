@@ -7,6 +7,18 @@ const { fetchBases, fetchTables, fetchRecords } = require('./airtable');
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
 
+// ── Logging ────────────────────────────────────────────────────────────
+// Packaged apps have no visible console, so timing/diagnostic logs are also
+// written to a file coworkers can send back when something feels slow.
+
+const logFilePath = path.join(app.getPath('userData'), 'higgtable.log');
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  try { fs.appendFileSync(logFilePath, line + '\n'); } catch {}
+}
+
 // ── Settings ───────────────────────────────────────────────────────────
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -167,21 +179,48 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 ipcMain.handle('get-bases', async () => {
   const key = getApiKey();
   if (!key) throw new Error('NO_API_KEY');
-  try { return await fetchBases(key); }
-  catch (err) { throw new Error(`get-bases failed: ${err.message}`); }
+  const t0 = Date.now();
+  try {
+    const bases = await fetchBases(key, log);
+    log(`get-bases: ${bases.length} bases in ${Date.now() - t0}ms`);
+    return bases;
+  } catch (err) {
+    log(`get-bases: FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    throw new Error(`get-bases failed: ${err.message}`);
+  }
 });
 ipcMain.handle('get-tables', async (_e, baseId) => {
   const key = getApiKey();
   if (!key) throw new Error('NO_API_KEY');
-  try { return await fetchTables(key, baseId); }
-  catch (err) { throw new Error(`get-tables failed: ${err.message}`); }
+  const t0 = Date.now();
+  try {
+    const tables = await fetchTables(key, baseId, log);
+    log(`get-tables: ${tables.length} tables in ${Date.now() - t0}ms`);
+    return tables;
+  } catch (err) {
+    log(`get-tables: FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    throw new Error(`get-tables failed: ${err.message}`);
+  }
 });
-ipcMain.handle('get-records', async (_e, baseId, tableId) => {
+ipcMain.handle('get-records', async (event, baseId, tableId, requestId) => {
   const key = getApiKey();
   if (!key) throw new Error('NO_API_KEY');
-  try { return await fetchRecords(key, baseId, tableId); }
-  catch (err) { throw new Error(`get-records failed: ${err.message}`); }
+  const t0 = Date.now();
+  log(`get-records: starting fetch for table=${tableId}`);
+  try {
+    const records = await fetchRecords(key, baseId, tableId, log, (newRecords, totalSoFar, page) => {
+      event.sender.send('records-progress', { requestId, tableId, page, newRecords, totalSoFar });
+    });
+    log(`get-records: table=${tableId} got ${records.length} records in ${Date.now() - t0}ms`);
+    return records;
+  } catch (err) {
+    log(`get-records: table=${tableId} FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    throw new Error(`get-records failed: ${err.message}`);
+  }
 });
+
+ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
+ipcMain.handle('get-log-path', () => logFilePath);
 
 ipcMain.handle('get-settings', () => loadSettingsFile());
 ipcMain.handle('save-settings', (_e, data) => {
