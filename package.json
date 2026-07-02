@@ -43,7 +43,8 @@
     "publish": {
       "provider": "github",
       "owner": "CYBEROUT-me",
-      "repo": "higgtable"
+      "repo": "higgtable",
+      "releaseType": "release"
     }
   },
   "dependencies": {
