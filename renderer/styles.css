@@ -61,46 +61,46 @@ tr.highlight-flash td { animation: flash-highlight 1.4s ease-out 2; }
 .error { color: #f66; }
 
 /* ── Rename panel ── */
-#rename-panel { border-top: 2px solid #1e4d8c; background: #1a1a1a; flex-shrink: 0; padding: 8px 12px; max-height: 260px; display: flex; flex-direction: column; gap: 6px; }
-#rename-header { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-#rename-task-label { flex: 1; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#rename-task-name { color: #7af; font-family: monospace; font-size: 11px; }
-#rename-panel-close { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; line-height: 1; padding: 0 4px; flex-shrink: 0; }
-#rename-panel-close:hover { color: #aaa; }
-#drop-zone { border: 1px dashed #444; border-radius: 5px; padding: 10px 16px; text-align: center; color: #666; font-size: 12px; cursor: default; transition: border-color 0.15s, background 0.15s; }
-#drop-zone.drag-over { border-color: #4a9; color: #4a9; background: rgba(68,170,153,0.06); }
-#drop-zone button { background: none; border: none; color: #5af; cursor: pointer; font-size: 12px; text-decoration: underline; padding: 0; }
+#rename-panel { border-top: 2px solid var(--accent); background: var(--bg-surface); flex-shrink: 0; padding: var(--space-4); max-height: 260px; display: flex; flex-direction: column; gap: var(--space-2); }
+#rename-header { display: flex; align-items: center; gap: var(--space-3); font-size: 12px; }
+#rename-task-label { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rename-task-name { color: var(--accent); font-family: monospace; font-size: 11px; }
+#rename-panel-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 var(--space-2); flex-shrink: 0; }
+#rename-panel-close:hover { color: var(--text-primary); }
+#drop-zone { border: 1px dashed var(--border-strong); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); text-align: center; color: var(--text-muted); font-size: 12px; cursor: default; transition: border-color 0.15s, background 0.15s; }
+#drop-zone.drag-over { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+#drop-zone button { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; padding: 0; }
 #file-list { overflow-y: auto; flex: 1; }
-.file-row { display: flex; align-items: center; gap: 10px; padding: 3px 2px; font-size: 12px; border-bottom: 1px solid #242424; }
-.fname { color: #888; min-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-.fdims { color: #555; min-width: 72px; font-size: 11px; }
+.file-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1) var(--space-1); font-size: 12px; border-bottom: 1px solid var(--border); }
+.fname { color: var(--text-secondary); min-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.fdims { color: var(--text-muted); min-width: 72px; font-size: 11px; }
 .ftype { min-width: 28px; }
-.ftype.ratio { color: #4a9; font-weight: bold; }
+.ftype.ratio { color: var(--accent); font-weight: bold; }
 .ftype.unknown { color: #fa0; }
-.farrow { color: #555; }
-.fnew { color: #d4d4d4; font-family: monospace; font-size: 11px; }
+.farrow { color: var(--text-muted); }
+.fnew { color: var(--text-primary); font-family: monospace; font-size: 11px; }
 .ferror { color: #f66; font-size: 11px; }
-#rename-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+#rename-footer { display: flex; align-items: center; gap: var(--space-3); padding-top: var(--space-1); }
 #rename-warning { flex: 1; font-size: 11px; color: #fa0; }
-button.primary { background: #1e4d8c; border: 1px solid #2a5ea8; color: #fff; padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-button.primary:hover { background: #2a5ea8; }
-button { background: #2d2d2d; border: 1px solid #444; color: #d4d4d4; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-button:hover { background: #3a3a3a; }
+button.primary { background: var(--accent); border: 1px solid var(--accent-strong); color: #0d1512; padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }
+button.primary:hover { background: var(--accent-strong); }
+button { background: var(--bg-surface-2); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-2) var(--space-4); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; }
+button:hover { background: var(--border); }
 
 /* ── Status bar ── */
-footer#statusbar { padding: 3px 10px; font-size: 11px; color: #555; border-top: 1px solid #2a2a2a; flex-shrink: 0; }
+footer#statusbar { padding: var(--space-1) var(--space-4); font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); flex-shrink: 0; }
 footer#statusbar.error { color: #f66; }
 
 /* ── Progress bar ── */
-#progress-bar { height: 2px; flex-shrink: 0; overflow: hidden; opacity: 0; transition: opacity 0.15s; background: #222; }
+#progress-bar { height: 2px; flex-shrink: 0; overflow: hidden; opacity: 0; transition: opacity 0.15s; background: var(--border); }
 #progress-bar.active { opacity: 1; }
-#progress-bar-fill { height: 100%; width: 30%; background: #4a9; transform: translateX(-100%); animation: progress-slide 1.2s ease-in-out infinite; }
+#progress-bar-fill { height: 100%; width: 30%; background: var(--accent); transform: translateX(-100%); animation: progress-slide 1.2s ease-in-out infinite; }
 @keyframes progress-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
 
 /* ── Bulk actions ── */
-#bulk-actions-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: #1e3a5f; border-bottom: 1px solid #2a5ea8; font-size: 12px; flex-shrink: 0; }
+#bulk-actions-bar { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) var(--space-4); background: rgba(79, 214, 173, 0.12); border-bottom: 1px solid var(--accent-strong); font-size: 12px; flex-shrink: 0; }
 #bulk-actions-bar.hidden { display: none; }
-#bulk-actions-count { color: #9cc7f0; }
+#bulk-actions-count { color: var(--accent); font-weight: 600; }
 
 /* ── Dashboard ── */
 #dashboard-container { flex: 1; overflow: auto; min-height: 0; padding: var(--space-6) var(--space-7); }
