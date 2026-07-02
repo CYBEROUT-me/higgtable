@@ -43,4 +43,36 @@ async function fetchRecords(apiKey, baseId, tableId, logger = noop, onPage = noo
   return records;
 }
 
-module.exports = { fetchBases, fetchTables, fetchRecords };
+async function uploadAttachment(apiKey, baseId, recordId, fieldName, filename, contentType, base64Data, logger = noop) {
+  const url = `https://content.airtable.com/v0/${baseId}/${recordId}/${encodeURIComponent(fieldName)}/uploadAttachment`;
+  const t0 = Date.now();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType, file: base64Data, filename }),
+  });
+  logger(`POST ${url} → ${res.status} in ${Date.now() - t0}ms`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Airtable upload error: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+  }
+  return res.json();
+}
+
+async function updateRecord(apiKey, baseId, tableId, recordId, fields, logger = noop) {
+  const url = `${BASE_URL}/${baseId}/${tableId}/${recordId}`;
+  const t0 = Date.now();
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  logger(`PATCH ${url} → ${res.status} in ${Date.now() - t0}ms`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Airtable update error: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+  }
+  return res.json();
+}
+
+module.exports = { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord };

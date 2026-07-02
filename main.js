@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { fetchBases, fetchTables, fetchRecords } = require('./airtable');
+const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord } = require('./airtable');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -216,6 +216,45 @@ ipcMain.handle('get-records', async (event, baseId, tableId, requestId) => {
   } catch (err) {
     log(`get-records: table=${tableId} FAILED after ${Date.now() - t0}ms — ${err.message}`);
     throw new Error(`get-records failed: ${err.message}`);
+  }
+});
+
+const IMAGE_CONTENT_TYPES = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+  '.tiff': 'image/tiff', '.tif': 'image/tiff',
+};
+
+ipcMain.handle('upload-attachment', async (_e, baseId, recordId, fieldName, filePath) => {
+  const key = getApiKey();
+  if (!key) throw new Error('NO_API_KEY');
+  const ext = path.extname(filePath).toLowerCase();
+  const contentType = IMAGE_CONTENT_TYPES[ext];
+  if (!contentType) throw new Error(`Not a supported image file: ${ext}`);
+  const filename = path.basename(filePath);
+  const buf = fs.readFileSync(filePath);
+  log(`upload-attachment: uploading ${filename} (${buf.length} bytes) to record=${recordId} field=${fieldName}`);
+  try {
+    const result = await uploadAttachment(key, baseId, recordId, fieldName, filename, contentType, buf.toString('base64'), log);
+    log(`upload-attachment: success, ${fieldName} now has ${(result.fields?.[fieldName] || []).length} attachment(s)`);
+    return result;
+  } catch (err) {
+    log(`upload-attachment: FAILED — ${err.message}`);
+    throw new Error(`upload-attachment failed: ${err.message}`);
+  }
+});
+
+ipcMain.handle('update-record', async (_e, baseId, tableId, recordId, fields) => {
+  const key = getApiKey();
+  if (!key) throw new Error('NO_API_KEY');
+  log(`update-record: record=${recordId} fields=${Object.keys(fields).join(',')}`);
+  try {
+    const result = await updateRecord(key, baseId, tableId, recordId, fields, log);
+    log(`update-record: success for record=${recordId}`);
+    return result;
+  } catch (err) {
+    log(`update-record: FAILED — ${err.message}`);
+    throw new Error(`update-record failed: ${err.message}`);
   }
 });
 

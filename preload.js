@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('airtable', {
     ipcRenderer.on('records-progress', listener);
     return () => ipcRenderer.removeListener('records-progress', listener);
   },
+  uploadAttachment: (baseId, recordId, fieldName, filePath) =>
+    ipcRenderer.invoke('upload-attachment', baseId, recordId, fieldName, filePath),
+  updateRecord: (baseId, tableId, recordId, fields) =>
+    ipcRenderer.invoke('update-record', baseId, tableId, recordId, fields),
 });
 
 contextBridge.exposeInMainWorld('app', {

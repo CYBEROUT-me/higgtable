@@ -19,7 +19,12 @@ const state = {
   dashboardPreset: 'week', // 'week' | 'lastWeek' | 'month' | 'prevMonth' | 'all' | 'custom'
   dashboardCustomFrom: '',
   dashboardCustomTo: '',
+  highlightRecordId: null,
+  hiddenFields: JSON.parse(localStorage.getItem('higgtable_hidden_fields') || '{}'), // { tableName: [fieldName, ...] }
 };
+
+let currentDetailRecord = null;
+let currentDetailTable = null;
 
 const recordsCache = {};
 const seenTaskIds = {};
@@ -243,6 +248,7 @@ async function preloadOtherTables() {
     try {
       recordsCache[name] = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
       log(`preloadOtherTables: ${name} — ${recordsCache[name].length} records in ${Date.now() - t0}ms`);
+      maybeRefreshDashboard();
     } catch (err) {
       log(`preloadOtherTables: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
     } finally {
@@ -314,6 +320,7 @@ async function pollAllTables() {
     }
     seenTaskIds[name] = new Set(fresh.map(r => r.id));
     recordsCache[name] = fresh;
+    maybeRefreshDashboard();
 
     if (state.activeTable === name) {
       state.records = fresh;
@@ -329,7 +336,30 @@ function notifyNewTask(rec, tableName) {
   const n = new Notification('New task assigned', {
     body: `${rec.fields['Name'] || 'Untitled task'} (${shortTable})`,
   });
-  n.onclick = () => window.focus();
+  n.onclick = () => { window.focus(); goToRecord(rec, tableName); };
+}
+
+// Jumps straight to a specific record from a notification click: switches to
+// its table, makes sure its Status chip is active (so it isn't hidden by the
+// current filter), and highlights + scrolls to the row once rendered.
+function goToRecord(rec, tableName) {
+  hideDashboard();
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const tabBtn = document.querySelector(`.tab[data-table="${tableName.replace(/"/g, '\\"')}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
+
+  const status = rec.fields['Status'] || '';
+  if (status && !state.activeStatuses.has(status)) {
+    state.activeStatuses.add(status);
+    renderStatusChips();
+  }
+
+  state.highlightRecordId = rec.id;
+  if (state.activeTable === tableName && recordsCache[tableName]) {
+    render();
+  } else {
+    loadTable(tableName);
+  }
 }
 
 function refreshDES() {
@@ -391,10 +421,16 @@ function render() {
   });
 
   const tbody = table.createTBody();
+  let highlightedRow = null;
   filtered.forEach((rec, i) => {
     const tr = tbody.insertRow();
     if (state.selectedTask && state.selectedTask.id === rec.id) tr.classList.add('selected');
+    if (state.highlightRecordId === rec.id) {
+      tr.classList.add('highlight-flash');
+      highlightedRow = tr;
+    }
     tr.onclick = () => onRowClick(rec, tr);
+    tr.ondblclick = () => openRecordModal(rec, state.activeTable);
     const tdN = tr.insertCell(); tdN.textContent = i + 1;
     cols.forEach(col => {
       const td = tr.insertCell();
@@ -407,6 +443,11 @@ function render() {
   container.innerHTML = '';
   container.appendChild(table);
   setStatus(`${filtered.length} of ${state.records.length} records`);
+
+  if (state.highlightRecordId) {
+    if (highlightedRow) highlightedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    state.highlightRecordId = null; // one-shot — don't replay on the next unrelated render
+  }
 }
 
 // ── UI Components ────────────────────────────────────────────────────────
@@ -454,6 +495,14 @@ function showDashboard() {
   setStatus('Dashboard: Done tasks by designer');
   syncDashboardControls();
   renderDashboard();
+}
+
+// Called whenever a background fetch (preload/poll) updates recordsCache, so
+// the dashboard's totals catch up live instead of only on next tab re-entry.
+function maybeRefreshDashboard() {
+  if (!document.getElementById('dashboard-container').classList.contains('hidden')) {
+    renderDashboard();
+  }
 }
 
 function hideDashboard() {
@@ -577,6 +626,308 @@ function renderDashboard() {
   area.appendChild(table);
 }
 
+// ── Record detail modal ─────────────────────────────────────────────────
+// Double-click a row to open a field-by-field editor, similar to Airtable's
+// own expanded record view: each field renders with the right widget for
+// its type (select dropdown, checkboxes, date picker, etc.) and saves back
+// to Airtable immediately on change — there's no separate "Save" step,
+// matching Airtable's own inline-edit behavior.
+
+const READONLY_FIELD_TYPES = new Set([
+  'formula', 'rollup', 'count', 'autoNumber', 'createdTime', 'lastModifiedTime',
+  'createdBy', 'lastModifiedBy', 'button', 'multipleLookupValues', 'aiText',
+]);
+
+function openRecordModal(rec, tableName) {
+  currentDetailRecord = rec;
+  currentDetailTable = tableName;
+  renderRecordModal(rec, tableName);
+  document.getElementById('record-modal').classList.remove('hidden');
+}
+
+function closeRecordModal() {
+  document.getElementById('record-modal').classList.add('hidden');
+  currentDetailRecord = null;
+  currentDetailTable = null;
+}
+
+// Lets a user hide fields they don't care about (e.g. the long list of
+// per-network status columns) from the task detail view. Per-table, saved
+// to this computer only (localStorage) — doesn't affect Airtable itself.
+function openFieldSettings(tableName) {
+  if (!tableName) return;
+  document.getElementById('field-settings-table-name').textContent = tableName;
+  const list = document.getElementById('field-settings-list');
+  list.innerHTML = '';
+  const hidden = new Set(state.hiddenFields[tableName] || []);
+  const fields = state.tables[tableName]?.fields || [];
+  fields.forEach(field => {
+    const lbl = document.createElement('label');
+    lbl.className = 'field-settings-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !hidden.has(field.name);
+    cb.onchange = () => {
+      const set = new Set(state.hiddenFields[tableName] || []);
+      cb.checked ? set.delete(field.name) : set.add(field.name);
+      state.hiddenFields[tableName] = [...set];
+      localStorage.setItem('higgtable_hidden_fields', JSON.stringify(state.hiddenFields));
+      if (currentDetailRecord && currentDetailTable === tableName) renderRecordModal(currentDetailRecord, tableName);
+    };
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(' ' + field.name));
+    list.appendChild(lbl);
+  });
+  document.getElementById('field-settings-modal').classList.remove('hidden');
+}
+
+function closeFieldSettings() {
+  document.getElementById('field-settings-modal').classList.add('hidden');
+}
+
+function renderRecordModal(rec, tableName) {
+  document.getElementById('record-modal-title').textContent = rec.fields['Name'] || 'Task details';
+  const body = document.getElementById('record-modal-body');
+  body.innerHTML = '';
+
+  const hidden = new Set(state.hiddenFields[tableName] || []);
+  const fields = (state.tables[tableName]?.fields || []).filter(f => !hidden.has(f.name));
+  fields.forEach(field => {
+    const row = document.createElement('div');
+    row.className = 'record-field-row';
+
+    const label = document.createElement('div');
+    label.className = 'record-field-label';
+    label.textContent = field.name;
+    row.appendChild(label);
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'record-field-value';
+    valueEl.appendChild(buildFieldInput(rec, tableName, field, rec.fields[field.name]));
+    row.appendChild(valueEl);
+    body.appendChild(row);
+  });
+}
+
+function buildFieldInput(rec, tableName, field, val) {
+  const type = field.type;
+
+  if (READONLY_FIELD_TYPES.has(type)) {
+    const span = document.createElement('span');
+    span.className = 'record-readonly';
+    span.textContent = formatReadonlyValue(val);
+    return span;
+  }
+
+  if (type === 'multipleAttachments') return buildAttachmentField(rec, tableName, field, val);
+
+  if (type === 'multipleRecordLinks') {
+    const span = document.createElement('span');
+    span.className = 'record-readonly';
+    span.textContent = Array.isArray(val) ? `${val.length} linked record(s)` : '';
+    span.title = "Linked records aren't editable here — use Airtable directly.";
+    return span;
+  }
+
+  if (type === 'singleSelect') {
+    const sel = document.createElement('select');
+    sel.appendChild(new Option('—', ''));
+    (field.options?.choices || []).forEach(choice => sel.appendChild(new Option(choice.name, choice.name)));
+    sel.value = val || '';
+    sel.onchange = () => updateRecordField(rec, tableName, field, sel.value || null, sel);
+    return sel;
+  }
+
+  if (type === 'multipleSelects') return buildMultiSelectField(rec, tableName, field, val);
+
+  if (type === 'checkbox') {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!val;
+    cb.onchange = () => updateRecordField(rec, tableName, field, cb.checked, cb);
+    return cb;
+  }
+
+  if (type === 'date' || type === 'dateTime') {
+    const inp = document.createElement('input');
+    inp.type = 'date';
+    inp.value = val ? String(val).slice(0, 10) : '';
+    inp.onchange = () => updateRecordField(rec, tableName, field, inp.value || null, inp);
+    return inp;
+  }
+
+  if (type === 'number' || type === 'currency' || type === 'percent' || type === 'duration') {
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.value = val == null ? '' : val;
+    inp.onchange = () => updateRecordField(rec, tableName, field, inp.value === '' ? null : Number(inp.value), inp);
+    return inp;
+  }
+
+  if (type === 'multilineText' || type === 'richText') {
+    const ta = document.createElement('textarea');
+    ta.rows = 4;
+    ta.value = val == null ? '' : String(val);
+    ta.onblur = () => updateRecordField(rec, tableName, field, ta.value || null, ta);
+    return ta;
+  }
+
+  // Fallback for singleLineText, url, email, phoneNumber, and anything else
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.value = val == null ? '' : String(val);
+  inp.onblur = () => updateRecordField(rec, tableName, field, inp.value || null, inp);
+  return inp;
+}
+
+function formatReadonlyValue(val) {
+  if (val == null) return '';
+  if (Array.isArray(val)) return val.map(v => (v && typeof v === 'object') ? (v.name || v.id || JSON.stringify(v)) : v).join(', ');
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val);
+}
+
+// Multi-select fields can have dozens of options (e.g. Tags) — a checkbox
+// per choice becomes an unreadable wall, so instead show only the selected
+// values as removable chips, with a compact dropdown to add more.
+function buildMultiSelectField(rec, tableName, field, val) {
+  const wrap = document.createElement('div');
+  wrap.className = 'record-multiselect';
+  const current = new Set(Array.isArray(val) ? val : []);
+  const choices = field.options?.choices || [];
+
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'record-chips';
+
+  const addSelect = document.createElement('select');
+  addSelect.className = 'record-chip-add';
+
+  function renderChips() {
+    chipsRow.innerHTML = '';
+    [...current].forEach(name => {
+      const chip = document.createElement('span');
+      chip.className = 'record-chip';
+      chip.textContent = name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'record-chip-remove';
+      remove.textContent = '×';
+      remove.onclick = () => {
+        current.delete(name);
+        renderChips();
+        renderAddOptions();
+        updateRecordField(rec, tableName, field, [...current], wrap);
+      };
+      chip.appendChild(remove);
+      chipsRow.appendChild(chip);
+    });
+  }
+
+  function renderAddOptions() {
+    addSelect.innerHTML = '';
+    addSelect.appendChild(new Option(choices.length ? '+ Add...' : '(no options)', ''));
+    choices.filter(c => !current.has(c.name)).forEach(c => addSelect.appendChild(new Option(c.name, c.name)));
+  }
+
+  addSelect.onchange = () => {
+    if (!addSelect.value) return;
+    current.add(addSelect.value);
+    renderChips();
+    renderAddOptions();
+    updateRecordField(rec, tableName, field, [...current], wrap);
+  };
+
+  renderChips();
+  renderAddOptions();
+  wrap.appendChild(chipsRow);
+  wrap.appendChild(addSelect);
+  return wrap;
+}
+
+function buildAttachmentField(rec, tableName, field, val) {
+  const wrap = document.createElement('div');
+  wrap.className = 'record-attachment-field';
+
+  const gallery = document.createElement('div');
+  gallery.className = 'record-attachment-gallery';
+  (val || []).forEach(att => {
+    const img = document.createElement('img');
+    img.className = 'record-attachment-thumb';
+    img.src = (att.thumbnails?.large?.url) || att.url;
+    img.title = att.filename || '';
+    img.loading = 'lazy';
+    gallery.appendChild(img);
+  });
+  wrap.appendChild(gallery);
+
+  const uploadRow = document.createElement('div');
+  uploadRow.className = 'record-upload-section';
+  const btn = document.createElement('button');
+  btn.textContent = 'Upload photo';
+  const status = document.createElement('span');
+  status.className = 'record-upload-status';
+  btn.onclick = () => uploadAttachmentToField(rec, tableName, field, status);
+  uploadRow.appendChild(btn);
+  uploadRow.appendChild(status);
+  wrap.appendChild(uploadRow);
+
+  return wrap;
+}
+
+async function uploadAttachmentToField(rec, tableName, field, statusEl) {
+  const paths = await window.app.openFileDialog();
+  if (!paths.length) return;
+  statusEl.className = 'record-upload-status';
+  statusEl.textContent = 'Uploading...';
+  try {
+    const result = await window.airtable.uploadAttachment(state.baseId, rec.id, field.name, paths[0]);
+    rec.fields[field.name] = result.fields[field.name];
+    log(`uploadAttachmentToField: uploaded ${paths[0]} to ${field.name} on record ${rec.id}`);
+    if (currentDetailRecord && currentDetailRecord.id === rec.id) {
+      renderRecordModal(rec, tableName);
+      document.querySelector('.record-upload-status').textContent = 'Uploaded!';
+    }
+  } catch (err) {
+    statusEl.className = 'record-upload-status error';
+    statusEl.textContent = `Error: ${err.message}`;
+    log(`uploadAttachmentToField: FAILED — ${err.message}`);
+  }
+}
+
+async function updateRecordField(rec, tableName, field, newValue, inputEl) {
+  const tableInfo = state.tables[tableName];
+  try {
+    const result = await window.airtable.updateRecord(state.baseId, tableInfo.id, rec.id, { [field.name]: newValue });
+    rec.fields[field.name] = result.fields[field.name];
+    flashFieldStatus(inputEl, 'saved');
+    log(`updateRecordField: ${field.name} on record ${rec.id} -> ${JSON.stringify(newValue)}`);
+    if (field.name === 'Name') {
+      document.getElementById('record-modal-title').textContent = rec.fields['Name'] || 'Task details';
+    }
+    // Edits to fields like Status/DES can change what's visible in the main
+    // table or the dashboard totals — keep both in sync immediately.
+    if (state.activeTable === tableName) render();
+    maybeRefreshDashboard();
+  } catch (err) {
+    flashFieldStatus(inputEl, 'error', err.message);
+    log(`updateRecordField: FAILED for ${field.name} — ${err.message}`);
+  }
+}
+
+function flashFieldStatus(el, kind, errMsg) {
+  if (!el) return;
+  el.classList.remove('field-saved', 'field-error');
+  el.title = '';
+  if (kind === 'saved') {
+    el.classList.add('field-saved');
+    setTimeout(() => el.classList.remove('field-saved'), 1000);
+  } else if (kind === 'error') {
+    el.classList.add('field-error');
+    el.title = errMsg || 'Update failed';
+    alert(`Failed to save: ${errMsg}`);
+  }
+}
+
 // ── Task selection & rename panel ────────────────────────────────────────
 
 function onRowClick(rec, tr) {
@@ -690,6 +1041,8 @@ function renderFileList() {
   footer.classList.remove('hidden');
 }
 
+const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
 async function performRename() {
   const fullTaskName = state.selectedTask ? (state.selectedTask.fields['Name'] || '') : '';
   const taskName = stripAspectRatio(fullTaskName);
@@ -700,6 +1053,7 @@ async function performRename() {
 
   const errors = [];
   let renamed = 0;
+  const previewCandidates = [];
   for (const f of toRename) {
     const ext = f.name.includes('.') ? f.name.split('.').pop() : '';
     const dir = f.path.substring(0, f.path.lastIndexOf('/'));
@@ -711,15 +1065,34 @@ async function performRename() {
       f.path = newPath;
       f.name = newName;
       renamed++;
+      if (f.ratio === '1x1' && PREVIEW_IMAGE_EXTS.has(ext.toLowerCase())) previewCandidates.push(newPath);
     } catch (err) {
       errors.push(`${f.name}: ${err.message}`);
     }
   }
 
+  // A 1x1 image is typically the ad's peekshot/thumbnail — auto-upload it as
+  // the task's Preview so nobody has to do that step by hand in Airtable.
+  let previewNote = '';
+  if (previewCandidates.length && state.selectedTask) {
+    for (const filePath of previewCandidates) {
+      try {
+        const result = await window.airtable.uploadAttachment(state.baseId, state.selectedTask.id, 'Preview', filePath);
+        state.selectedTask.fields['Preview'] = result.fields['Preview'];
+        log(`performRename: auto-uploaded 1x1 preview ${filePath} to task ${state.selectedTask.id}`);
+        previewNote = '\n\n1x1 image uploaded to the task’s Preview in Airtable.';
+      } catch (err) {
+        previewNote = `\n\nCouldn't auto-upload the 1x1 preview to Airtable: ${err.message}`;
+        log(`performRename: preview upload FAILED — ${err.message}`);
+      }
+    }
+    maybeRefreshDashboard();
+  }
+
   if (errors.length) {
-    alert(`Renamed ${renamed} file(s).\n\nErrors:\n${errors.join('\n')}`);
+    alert(`Renamed ${renamed} file(s).\n\nErrors:\n${errors.join('\n')}${previewNote}`);
   } else {
-    alert(`Done! Renamed ${renamed} file(s).`);
+    alert(`Done! Renamed ${renamed} file(s).${previewNote}`);
     clearTaskSelection();
   }
 }
@@ -801,6 +1174,24 @@ document.getElementById('settings-btn').addEventListener('click', () => showSett
 document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
 document.getElementById('settings-cancel-btn').addEventListener('click', hideSettingsModal);
 document.getElementById('api-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSettings(); });
+
+document.getElementById('record-modal-close').addEventListener('click', closeRecordModal);
+document.getElementById('record-modal').addEventListener('click', e => {
+  if (e.target.id === 'record-modal') closeRecordModal();
+});
+document.getElementById('record-fields-settings-btn').addEventListener('click', () => openFieldSettings(currentDetailTable));
+document.getElementById('field-settings-done-btn').addEventListener('click', closeFieldSettings);
+document.getElementById('field-settings-modal').addEventListener('click', e => {
+  if (e.target.id === 'field-settings-modal') closeFieldSettings();
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!document.getElementById('field-settings-modal').classList.contains('hidden')) {
+    closeFieldSettings();
+  } else if (!document.getElementById('record-modal').classList.contains('hidden')) {
+    closeRecordModal();
+  }
+});
 
 document.getElementById('rename-panel-close').addEventListener('click', clearTaskSelection);
 document.getElementById('browse-files-btn').addEventListener('click', async () => {

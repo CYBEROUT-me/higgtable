@@ -27,6 +27,8 @@ td { padding: 4px 8px; border-bottom: 1px solid #272727; white-space: nowrap; ma
 tr { cursor: pointer; }
 tr:hover td { background: #242424; }
 tr.selected td { background: #1e3a5f !important; }
+tr.highlight-flash td { animation: flash-highlight 1.4s ease-out 2; }
+@keyframes flash-highlight { 0% { background: rgba(74,153,255,0.45); } 100% { background: transparent; } }
 .empty { padding: 24px; color: #555; font-style: italic; text-align: center; margin-top: 40px; }
 .error { color: #f66; }
 
@@ -103,3 +105,51 @@ table.dash-table tr.total-row td { border-top: 1px solid #3a3a3a; color: #888; f
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .hint { color: #555 !important; font-size: 11px !important; margin-top: 10px !important; }
 .hidden { display: none !important; }
+
+/* ── Record detail modal ── */
+.record-modal-box { max-width: 720px; width: 90vw; max-height: 82vh; display: flex; flex-direction: column; }
+.record-modal-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-shrink: 0; }
+.record-modal-header h2 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#record-modal-close, #record-fields-settings-btn { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; line-height: 1; padding: 0 4px; flex-shrink: 0; }
+#record-modal-close { font-size: 20px; }
+#record-modal-close:hover, #record-fields-settings-btn:hover { color: #aaa; }
+.field-settings-box { max-width: 420px; }
+.field-settings-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 16px; }
+.field-settings-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #d4d4d4; cursor: pointer; }
+#record-modal-body { overflow-y: auto; flex: 1; }
+.record-field-row { display: flex; gap: 14px; padding: 6px 0; border-bottom: 1px solid #2a2a2a; font-size: 12px; }
+.record-field-label { width: 140px; flex-shrink: 0; color: #888; }
+.record-field-value { flex: 1; color: #d4d4d4; word-break: break-word; }
+.record-field-value a { color: #7af; }
+.record-attachment-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 4px; margin: 0 6px 6px 0; border: 1px solid #3a3a3a; }
+.record-attachment-gallery { display: flex; flex-wrap: wrap; }
+.record-upload-section { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; }
+.record-upload-status { font-size: 11px; color: #888; }
+.record-upload-status.error { color: #f66; }
+.record-readonly { color: #666; font-style: italic; }
+
+.record-field-value select,
+.record-field-value input[type=text],
+.record-field-value input[type=number],
+.record-field-value input[type=date],
+.record-field-value textarea {
+  width: 100%; background: #1a1a1a; border: 1px solid #444; color: #d4d4d4;
+  padding: 5px 8px; border-radius: 4px; font-size: 12px; font-family: inherit;
+  color-scheme: dark;
+}
+.record-field-value textarea { resize: vertical; }
+.record-field-value select:focus,
+.record-field-value input:focus,
+.record-field-value textarea:focus { outline: 1px solid #4a9; border-color: #4a9; }
+.record-field-value input[type=checkbox] { width: auto; }
+.record-multiselect { display: flex; flex-direction: column; gap: 6px; border: 1px solid transparent; border-radius: 4px; padding: 2px; }
+.record-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.record-chips:empty { display: none; }
+.record-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(68,170,153,0.15); border: 1px solid #3a6b60; color: #7ecab5; padding: 2px 4px 2px 10px; border-radius: 12px; font-size: 11px; }
+.record-chip-remove { background: none; border: none; color: #7ecab5; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 4px; }
+.record-chip-remove:hover { color: #fff; }
+.record-field-value select.record-chip-add { width: auto; max-width: 220px; font-size: 11px; padding: 3px 6px; }
+.field-saved { border-color: #4a9 !important; transition: border-color 0.2s; }
+.field-error { border-color: #f66 !important; }
+
+/* ── Dashboard ── */

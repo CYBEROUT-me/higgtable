@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; img-src 'self' https://*.airtableusercontent.com data:;">
   <title>HiggTable</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -76,6 +76,28 @@
         <button id="settings-cancel-btn">Cancel</button>
       </div>
       <p class="hint">airtable.com → Account → Developer hub → Personal access tokens</p>
+    </div>
+  </div>
+
+  <div id="record-modal" class="modal-overlay hidden">
+    <div class="modal-box record-modal-box">
+      <div class="record-modal-header">
+        <h2 id="record-modal-title">Task details</h2>
+        <button id="record-fields-settings-btn" title="Choose which fields to show">⚙</button>
+        <button id="record-modal-close" title="Close">×</button>
+      </div>
+      <div id="record-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="field-settings-modal" class="modal-overlay hidden">
+    <div class="modal-box field-settings-box">
+      <h2>Show/hide fields — <span id="field-settings-table-name"></span></h2>
+      <p>Uncheck fields you don't want to see when opening a task. Saved on this computer only.</p>
+      <div id="field-settings-list" class="field-settings-list"></div>
+      <div class="modal-actions">
+        <button id="field-settings-done-btn" class="primary">Done</button>
+      </div>
     </div>
   </div>
 
