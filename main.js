@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord } = require('./airtable');
+const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -255,6 +255,20 @@ ipcMain.handle('update-record', async (_e, baseId, tableId, recordId, fields) =>
   } catch (err) {
     log(`update-record: FAILED — ${err.message}`);
     throw new Error(`update-record failed: ${err.message}`);
+  }
+});
+
+ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
+  const key = getApiKey();
+  if (!key) throw new Error('NO_API_KEY');
+  log(`update-records: batch of ${records.length} record(s) on table=${tableId}`);
+  try {
+    const result = await updateRecords(key, baseId, tableId, records, log);
+    log(`update-records: success for ${result.length} record(s)`);
+    return result;
+  } catch (err) {
+    log(`update-records: FAILED — ${err.message}`);
+    throw new Error(`update-records failed: ${err.message}`);
   }
 });
 

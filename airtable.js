@@ -75,4 +75,38 @@ async function updateRecord(apiKey, baseId, tableId, recordId, fields, logger = 
   return res.json();
 }
 
-module.exports = { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord };
+// Airtable's batch PATCH endpoint accepts at most 10 records per call.
+async function updateRecords(apiKey, baseId, tableId, records, logger = noop) {
+  const results = [];
+  for (let i = 0; i < records.length; i += 10) {
+    const chunk = records.slice(i, i + 10);
+    const updated = await patchRecordsChunk(apiKey, baseId, tableId, chunk, logger);
+    results.push(...updated);
+  }
+  return results;
+}
+
+async function patchRecordsChunk(apiKey, baseId, tableId, records, logger, attempt = 0) {
+  const url = `${BASE_URL}/${baseId}/${tableId}`;
+  const t0 = Date.now();
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ records }),
+  });
+  if (res.status === 429 && attempt < 5) {
+    const retryAfter = Number(res.headers?.get?.('Retry-After')) || attempt + 1;
+    logger(`rate limited (429) on batch PATCH ${url} — retrying in ${retryAfter}s (attempt ${attempt + 1}/5)`);
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
+    return patchRecordsChunk(apiKey, baseId, tableId, records, logger, attempt + 1);
+  }
+  logger(`PATCH ${url} (batch of ${records.length}) → ${res.status} in ${Date.now() - t0}ms`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Airtable batch update error: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+  }
+  const data = await res.json();
+  return data.records;
+}
+
+module.exports = { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords };

@@ -21,6 +21,8 @@ const state = {
   dashboardCustomTo: '',
   highlightRecordId: null,
   hiddenFields: JSON.parse(localStorage.getItem('higgtable_hidden_fields') || '{}'), // { tableName: [fieldName, ...] }
+  selectedIds: new Set(), // multi-selected rows in the active table, for bulk actions
+  selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
 };
 
 let currentDetailRecord = null;
@@ -159,6 +161,8 @@ async function init() {
 async function loadTable(tableName) {
   state.activeTable = tableName;
   clearTaskSelection();
+  state.selectedIds.clear();
+  updateBulkActionsBar();
 
   const tableInfo = state.tables[tableName];
   if (!tableInfo) {
@@ -233,6 +237,28 @@ async function loadTable(tableName) {
     hideProgressBar();
     setRefreshBusy(false);
     tablesInFlight.delete(tableName);
+  }
+}
+
+// Forces a fresh fetch of one table, bypassing the cache. Used by the
+// per-table refresh button and by the dashboard's "refresh all" button.
+async function refreshTableData(name) {
+  const info = state.tables[name];
+  if (!info || tablesInFlight.has(name)) return;
+  delete recordsCache[name];
+  if (state.activeTable === name) {
+    await loadTable(name);
+    return;
+  }
+  const t0 = Date.now();
+  tablesInFlight.add(name);
+  try {
+    recordsCache[name] = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+    log(`refreshTableData: ${name} — ${recordsCache[name].length} records in ${Date.now() - t0}ms`);
+  } catch (err) {
+    log(`refreshTableData: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
+  } finally {
+    tablesInFlight.delete(name);
   }
 }
 
@@ -390,6 +416,7 @@ function render() {
   if (!filtered.length) {
     container.innerHTML = '<p class="empty">No records match the current filters.</p>';
     setStatus('0 records');
+    updateBulkActionsBar();
     return;
   }
 
@@ -398,6 +425,7 @@ function render() {
 
   const table = document.createElement('table');
   const hr = table.createTHead().insertRow();
+
   ['#', ...cols].forEach(name => {
     const th = document.createElement('th');
     if (name === '#') {
@@ -425,12 +453,14 @@ function render() {
   filtered.forEach((rec, i) => {
     const tr = tbody.insertRow();
     if (state.selectedTask && state.selectedTask.id === rec.id) tr.classList.add('selected');
+    if (state.selectedIds.has(rec.id)) tr.classList.add('bulk-selected');
     if (state.highlightRecordId === rec.id) {
       tr.classList.add('highlight-flash');
       highlightedRow = tr;
     }
-    tr.onclick = () => onRowClick(rec, tr);
+    tr.onclick = e => onRowClick(rec, tr, e, i, filtered);
     tr.ondblclick = () => openRecordModal(rec, state.activeTable);
+
     const tdN = tr.insertCell(); tdN.textContent = i + 1;
     cols.forEach(col => {
       const td = tr.insertCell();
@@ -443,10 +473,51 @@ function render() {
   container.innerHTML = '';
   container.appendChild(table);
   setStatus(`${filtered.length} of ${state.records.length} records`);
+  updateBulkActionsBar();
 
   if (state.highlightRecordId) {
     if (highlightedRow) highlightedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
     state.highlightRecordId = null; // one-shot — don't replay on the next unrelated render
+  }
+}
+
+// ── Bulk actions ─────────────────────────────────────────────────────────
+
+function updateBulkActionsBar() {
+  const bar = document.getElementById('bulk-actions-bar');
+  const count = state.selectedIds.size;
+  bar.classList.toggle('hidden', count === 0);
+  document.getElementById('bulk-actions-count').textContent = `${count} selected`;
+}
+
+async function markSelectedAsToAccept() {
+  if (!state.selectedIds.size) return;
+  const tableInfo = state.tables[state.activeTable];
+  if (!tableInfo) return;
+
+  const ids = [...state.selectedIds];
+  const today = toISO(new Date());
+  const btn = document.getElementById('bulk-mark-accept-btn');
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  try {
+    const updates = ids.map(id => ({ id, fields: { Status: 'To accept', 'Date Done': today } }));
+    const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
+    const byId = new Map(results.map(r => [r.id, r]));
+    state.records.forEach(rec => {
+      const updated = byId.get(rec.id);
+      if (updated) rec.fields = updated.fields;
+    });
+    log(`markSelectedAsToAccept: updated ${results.length} record(s) to To accept`);
+    state.selectedIds.clear();
+    render();
+    maybeRefreshDashboard();
+  } catch (err) {
+    alert(`Failed to update some records: ${err.message}`);
+    log(`markSelectedAsToAccept: FAILED — ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Mark as To Accept';
   }
 }
 
@@ -487,12 +558,14 @@ function renderDESPicker() {
 
 function showDashboard() {
   clearTaskSelection();
+  state.selectedIds.clear();
+  updateBulkActionsBar();
   document.getElementById('records-container').classList.add('hidden');
   document.getElementById('status-filters').classList.add('hidden');
   document.getElementById('des-control').classList.add('hidden');
   document.getElementById('refresh-btn').classList.add('hidden');
   document.getElementById('dashboard-container').classList.remove('hidden');
-  setStatus('Dashboard: Done tasks by designer');
+  setStatus('Dashboard: completed tasks by designer');
   syncDashboardControls();
   renderDashboard();
 }
@@ -530,7 +603,8 @@ function computeDashboardStats() {
 
   TARGET_TABLES.forEach(name => {
     (recordsCache[name] || []).forEach(r => {
-      if ((r.fields['Status'] || '') !== 'Done') return;
+      const status = r.fields['Status'] || '';
+      if (status !== 'Done' && status !== 'To accept') return;
       const dateDone = r.fields['Date Done'];
       if (from || to) {
         if (!dateDone) return; // no date to place it in a specific range
@@ -571,7 +645,7 @@ function renderDashboard() {
   if (!rows.length) {
     const empty = document.createElement('p');
     empty.className = 'dash-note';
-    empty.textContent = 'No "Done" tasks found for this period.';
+    empty.textContent = 'No "Done" or "To accept" tasks found for this period.';
     area.appendChild(empty);
     return;
   }
@@ -581,11 +655,11 @@ function renderDashboard() {
   table.className = 'dash-table';
 
   const caption = document.createElement('caption');
-  caption.textContent = 'Done tasks by designer, across VCP / PLM / CMC / LB';
+  caption.textContent = 'Done + To accept tasks by designer, across VCP / PLM / CMC / LB';
   table.appendChild(caption);
 
   const hr = table.createTHead().insertRow();
-  ['#', 'Designer', 'Done', ...allTypes].forEach(label => {
+  ['#', 'Designer', 'Total', ...allTypes].forEach(label => {
     const th = document.createElement('th');
     th.textContent = label;
     hr.appendChild(th);
@@ -930,15 +1004,37 @@ function flashFieldStatus(el, kind, errMsg) {
 
 // ── Task selection & rename panel ────────────────────────────────────────
 
-function onRowClick(rec, tr) {
-  document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
-  if (state.selectedTask && state.selectedTask.id === rec.id) {
-    clearTaskSelection();
+// Finder-style multi-select: plain click still picks a single task for
+// renaming (unchanged); Shift-click extends a contiguous range for bulk
+// actions, Cmd/Ctrl-click toggles one row in or out of that selection.
+function onRowClick(rec, tr, e, index, filteredList) {
+  if (e && e.shiftKey) {
+    e.preventDefault();
+    let anchorIndex = filteredList.findIndex(r => r.id === state.selectionAnchorId);
+    if (anchorIndex === -1) anchorIndex = index;
+    const [start, end] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
+    for (let i = start; i <= end; i++) state.selectedIds.add(filteredList[i].id);
+    render();
     return;
   }
-  tr.classList.add('selected');
+  if (e && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    state.selectedIds.has(rec.id) ? state.selectedIds.delete(rec.id) : state.selectedIds.add(rec.id);
+    state.selectionAnchorId = rec.id;
+    render();
+    return;
+  }
+
+  state.selectedIds.clear();
+  state.selectionAnchorId = rec.id;
+  if (state.selectedTask && state.selectedTask.id === rec.id) {
+    clearTaskSelection();
+    render();
+    return;
+  }
   state.selectedTask = rec;
   openRenamePanel(rec);
+  render();
 }
 
 function openRenamePanel(rec) {
@@ -1150,8 +1246,30 @@ document.getElementById('des-select').addEventListener('change', e => {
 document.getElementById('refresh-btn').addEventListener('click', () => {
   if (document.getElementById('refresh-btn').disabled) return;
   log(`refresh-btn: forcing re-fetch of ${state.activeTable}`);
-  delete recordsCache[state.activeTable];
-  loadTable(state.activeTable);
+  refreshTableData(state.activeTable);
+});
+
+document.getElementById('dashboard-refresh-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('dashboard-refresh-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.classList.add('spinning');
+  log('dashboard-refresh-btn: forcing re-fetch of all 4 tables');
+  try {
+    for (const name of TARGET_TABLES) {
+      await refreshTableData(name);
+      maybeRefreshDashboard();
+    }
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('spinning');
+  }
+});
+
+document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
+document.getElementById('bulk-clear-btn').addEventListener('click', () => {
+  state.selectedIds.clear();
+  render();
 });
 
 document.getElementById('dashboard-controls').addEventListener('click', e => {

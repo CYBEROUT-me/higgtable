@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('airtable', {
     ipcRenderer.invoke('upload-attachment', baseId, recordId, fieldName, filePath),
   updateRecord: (baseId, tableId, recordId, fields) =>
     ipcRenderer.invoke('update-record', baseId, tableId, recordId, fields),
+  updateRecords: (baseId, tableId, records) =>
+    ipcRenderer.invoke('update-records', baseId, tableId, records),
 });
 
 contextBridge.exposeInMainWorld('app', {
