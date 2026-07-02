@@ -667,9 +667,10 @@ function renderDashboard() {
   table.appendChild(caption);
 
   const hr = table.createTHead().insertRow();
-  ['#', 'Designer', 'Total', ...allTypes].forEach(label => {
+  ['#', 'Designer', 'Total', ...allTypes].forEach((label, i) => {
     const th = document.createElement('th');
     th.textContent = label;
+    if (i >= 3) th.className = 'dash-type-header';
     hr.appendChild(th);
   });
 
@@ -689,8 +690,9 @@ function renderDashboard() {
 
     allTypes.forEach(type => {
       const td = tr.insertCell();
-      td.className = 'dash-type-count';
-      td.textContent = row.types[type] || '';
+      const count = row.types[type] || 0;
+      td.className = count ? 'dash-type-count' : 'dash-type-count zero';
+      td.textContent = count || '–';
     });
   });
 
@@ -701,8 +703,9 @@ function renderDashboard() {
   totalRow.insertCell().textContent = rows.reduce((s, r) => s + r.total, 0);
   allTypes.forEach(type => {
     const td = totalRow.insertCell();
-    td.className = 'dash-type-count';
-    td.textContent = rows.reduce((s, r) => s + (r.types[type] || 0), 0);
+    const count = rows.reduce((s, r) => s + (r.types[type] || 0), 0);
+    td.className = count ? 'dash-type-count' : 'dash-type-count zero';
+    td.textContent = count || '–';
   });
 
   area.appendChild(table);
