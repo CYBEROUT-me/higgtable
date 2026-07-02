@@ -1,3 +1,28 @@
+:root {
+  --bg-app: #151515;
+  --bg-surface: #1e1e1e;
+  --bg-surface-2: #212121;
+  --border: #2e2e2e;
+  --border-strong: #3a3a3a;
+  --text-primary: #ececec;
+  --text-secondary: #999;
+  --text-muted: #666;
+  --accent: #4fd6ad;
+  --accent-bg: rgba(79, 214, 173, 0.15);
+  --accent-strong: #3fb894;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --shadow-panel: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-modal: 0 8px 24px rgba(0,0,0,0.45);
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, sans-serif; font-size: 13px; background: #1e1e1e; color: #d4d4d4; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
