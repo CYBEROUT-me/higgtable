@@ -277,7 +277,8 @@ ipcMain.handle('get-log-path', () => logFilePath);
 
 ipcMain.handle('get-settings', () => loadSettingsFile());
 ipcMain.handle('save-settings', (_e, data) => {
-  saveSettingsFile(data);
+  const merged = { ...loadSettingsFile(), ...data };
+  saveSettingsFile(merged);
   if (data.apiKey) cachedApiKey = data.apiKey;
 });
 ipcMain.handle('has-api-key', () => !!getApiKey());
@@ -292,6 +293,41 @@ ipcMain.handle('open-file-dialog', async () => {
     ]
   });
   return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('pick-directory', async () => {
+  const win = BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// Walks the working directory once and returns a map of the requested
+// filenames to their full path, so "Set Previews" doesn't re-scan the
+// filesystem once per task.
+function walkDirCollecting(dir, wanted, found) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkDirCollecting(full, wanted, found);
+    else if (wanted.has(entry.name)) found[entry.name] = full;
+  }
+}
+
+ipcMain.handle('find-preview-files', (_e, dir, filenames) => {
+  const wanted = new Set(filenames);
+  const found = {};
+  walkDirCollecting(dir, wanted, found);
+  return found;
+});
+
+// For the "Set Previews" approval modal — lets it show a thumbnail before upload.
+ipcMain.handle('read-image-data-url', (_e, filePath) => {
+  const ext = path.extname(filePath).toLowerCase();
+  const contentType = IMAGE_CONTENT_TYPES[ext];
+  if (!contentType) throw new Error(`Not a supported image file: ${ext}`);
+  const buf = fs.readFileSync(filePath);
+  return `data:${contentType};base64,${buf.toString('base64')}`;
 });
 
 ipcMain.handle('get-file-dimensions', (_e, filePath) => {

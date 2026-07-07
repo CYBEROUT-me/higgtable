@@ -23,6 +23,7 @@ const state = {
   hiddenFields: JSON.parse(localStorage.getItem('higgtable_hidden_fields') || '{}'), // { tableName: [fieldName, ...] }
   selectedIds: new Set(), // multi-selected rows in the active table, for bulk actions
   selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
+  workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
 };
 
 let currentDetailRecord = null;
@@ -102,6 +103,8 @@ function getDashboardRange() {
 
 async function boot() {
   log('boot: checking for API key');
+  const settings = await window.app.getSettings();
+  state.workingDirectory = settings.workingDirectory || '';
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
     log('boot: no API key, showing settings modal');
@@ -1204,12 +1207,137 @@ async function performRename() {
   }
 }
 
+// A task's "Name" field includes its own aspect-ratio suffix (e.g. "..._9x16"),
+// so the 1x1 preview file for it lives at "<name minus suffix>_1x1.png"
+// somewhere under the working directory (searched recursively) — mirrors the
+// auto-upload-on-rename convention in performRename() above, but runs over
+// whichever tasks the user Shift/Cmd-click-selected, with a review step
+// before anything is actually uploaded to Airtable.
+
+let pendingPreviewCandidates = [];
+
+async function openSetPreviewsModal() {
+  if (!state.workingDirectory) {
+    alert('Set a working directory first (⚙ Settings).');
+    return;
+  }
+  if (!state.selectedIds.size) return;
+
+  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
+  if (!records.length) return;
+
+  const btn = document.getElementById('bulk-set-previews-btn');
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  try {
+    const wanted = records.map(r => `${stripAspectRatio(r.fields['Name'])}_1x1.png`);
+    log(`openSetPreviewsModal: searching ${state.workingDirectory} for ${wanted.length} file(s)`);
+    const found = await window.app.findPreviewFiles(state.workingDirectory, wanted);
+
+    pendingPreviewCandidates = records.map(rec => {
+      const filename = `${stripAspectRatio(rec.fields['Name'])}_1x1.png`;
+      return { rec, filename, path: found[filename] || null, include: !!found[filename] };
+    });
+
+    if (!pendingPreviewCandidates.some(c => c.path)) {
+      alert('No matching "_1x1.png" files found for the selected tasks.');
+      return;
+    }
+
+    await renderPreviewApprovalList();
+    document.getElementById('preview-approval-modal').classList.remove('hidden');
+  } catch (err) {
+    alert(`Set Previews failed: ${err.message}`);
+    log(`openSetPreviewsModal: FAILED — ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Set Previews';
+  }
+}
+
+async function renderPreviewApprovalList() {
+  const list = document.getElementById('preview-approval-list');
+  list.innerHTML = '';
+
+  const thumbs = await Promise.all(pendingPreviewCandidates.map(c =>
+    c.path ? window.app.readImageDataUrl(c.path).catch(() => null) : Promise.resolve(null)
+  ));
+
+  pendingPreviewCandidates.forEach((c, i) => {
+    const row = document.createElement('div');
+    row.className = 'preview-approval-row' + (c.path ? '' : ' no-match');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = c.include;
+    checkbox.disabled = !c.path;
+    checkbox.addEventListener('change', () => { c.include = checkbox.checked; });
+    row.appendChild(checkbox);
+
+    const img = document.createElement('img');
+    img.className = 'preview-approval-thumb';
+    if (thumbs[i]) img.src = thumbs[i];
+    row.appendChild(img);
+
+    const info = document.createElement('div');
+    info.className = 'preview-approval-info';
+    const task = document.createElement('div');
+    task.className = 'preview-approval-task';
+    task.textContent = c.rec.fields['Name'];
+    const file = document.createElement('div');
+    file.className = 'preview-approval-file';
+    file.textContent = c.path ? c.filename : 'No match found';
+    if (c.path) file.title = c.path;
+    info.appendChild(task);
+    info.appendChild(file);
+    row.appendChild(info);
+
+    list.appendChild(row);
+  });
+}
+
+function closePreviewApprovalModal() {
+  document.getElementById('preview-approval-modal').classList.add('hidden');
+  pendingPreviewCandidates = [];
+}
+
+async function confirmSetPreviews() {
+  const toUpload = pendingPreviewCandidates.filter(c => c.include && c.path);
+  if (!toUpload.length) { closePreviewApprovalModal(); return; }
+
+  const btn = document.getElementById('preview-approval-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+  let uploaded = 0, failed = 0;
+  try {
+    for (const c of toUpload) {
+      try {
+        const result = await window.airtable.uploadAttachment(state.baseId, c.rec.id, 'Preview', c.path);
+        c.rec.fields['Preview'] = result.fields['Preview'];
+        uploaded++;
+        log(`confirmSetPreviews: uploaded ${c.path} to ${c.rec.fields['Name']}`);
+      } catch (err) {
+        failed++;
+        log(`confirmSetPreviews: FAILED for ${c.rec.fields['Name']} — ${err.message}`);
+      }
+    }
+    render();
+    maybeRefreshDashboard();
+    alert(`Set Previews done.\n\nUploaded: ${uploaded}${failed ? `\nFailed: ${failed}` : ''}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upload Selected';
+    closePreviewApprovalModal();
+  }
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────
 
 function showSettingsModal(forced = false) {
   document.getElementById('settings-modal').classList.remove('hidden');
   document.getElementById('settings-cancel-btn').style.display = forced ? 'none' : '';
   document.getElementById('api-key-input').value = '';
+  document.getElementById('working-dir-input').value = state.workingDirectory || '';
   document.getElementById('api-key-input').focus();
 }
 
@@ -1260,6 +1388,7 @@ document.getElementById('refresh-btn').addEventListener('click', () => {
   refreshTableData(state.activeTable);
 });
 
+
 document.getElementById('dashboard-refresh-btn').addEventListener('click', async () => {
   const btn = document.getElementById('dashboard-refresh-btn');
   if (btn.disabled) return;
@@ -1278,9 +1407,19 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 });
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
+document.getElementById('bulk-set-previews-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-set-previews-btn').disabled) return;
+  openSetPreviewsModal();
+});
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   state.selectedIds.clear();
   render();
+});
+
+document.getElementById('preview-approval-confirm-btn').addEventListener('click', confirmSetPreviews);
+document.getElementById('preview-approval-cancel-btn').addEventListener('click', closePreviewApprovalModal);
+document.getElementById('preview-approval-modal').addEventListener('click', e => {
+  if (e.target.id === 'preview-approval-modal') closePreviewApprovalModal();
 });
 
 document.getElementById('dashboard-controls').addEventListener('click', e => {
@@ -1303,6 +1442,14 @@ document.getElementById('settings-btn').addEventListener('click', () => showSett
 document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
 document.getElementById('settings-cancel-btn').addEventListener('click', hideSettingsModal);
 document.getElementById('api-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSettings(); });
+document.getElementById('browse-dir-btn').addEventListener('click', async () => {
+  const dir = await window.app.pickDirectory();
+  if (!dir) return;
+  state.workingDirectory = dir;
+  document.getElementById('working-dir-input').value = dir;
+  await window.app.saveSettings({ workingDirectory: dir });
+  log(`browse-dir-btn: working directory set to ${dir}`);
+});
 
 document.getElementById('record-modal-close').addEventListener('click', closeRecordModal);
 document.getElementById('record-modal').addEventListener('click', e => {
