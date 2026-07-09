@@ -56,7 +56,7 @@ tr.selected td { background: var(--accent-bg) !important; border-left: 2px solid
 tr.bulk-selected td { background: rgba(79, 214, 173, 0.08); }
 tr.bulk-selected:hover td { background: rgba(79, 214, 173, 0.14); }
 tr.highlight-flash td { animation: flash-highlight 1.4s ease-out 2; }
-.priority-pill { display: inline-block; padding: 2px var(--space-3); border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.select-pill { display: inline-block; padding: 2px var(--space-3); border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 @keyframes flash-highlight { 0% { background: rgba(79, 214, 173, 0.45); } 100% { background: transparent; } }
 .empty { padding: var(--space-7); color: var(--text-muted); font-style: italic; text-align: center; margin-top: 40px; }
 .error { color: #f66; }
@@ -168,6 +168,12 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .preview-approval-file { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #record-modal-body { overflow-y: auto; flex: 1; }
 .record-field-row { display: flex; gap: var(--space-5); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.record-wrapup-card { background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: var(--space-5); margin-bottom: var(--space-6); }
+.record-wrapup-card .record-field-row { border-bottom: none; padding: var(--space-2) 0; }
+.record-field-section-header { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent); padding: 0 0 var(--space-4); }
+.record-wrapup-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); margin-bottom: var(--space-3); }
+.record-wrapup-cell { display: flex; flex-direction: column; gap: var(--space-2); }
+.record-wrapup-cell label { font-size: 11px; color: var(--text-secondary); }
 .record-field-label { width: 140px; flex-shrink: 0; color: var(--text-secondary); }
 .record-field-value { flex: 1; color: var(--text-primary); word-break: break-word; }
 .record-field-value a { color: var(--accent); }

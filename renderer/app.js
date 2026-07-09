@@ -470,11 +470,19 @@ function render() {
 
   const tableFields = state.tables[state.activeTable]?.fields || [];
   const fieldNames = tableFields.map(f => f.name);
-  const cols = COLUMNS.filter(c => fieldNames.includes(c));
+  const hiddenCols = new Set(state.hiddenFields[state.activeTable] || []);
+  const cols = COLUMNS.filter(c => fieldNames.includes(c) && !hiddenCols.has(c));
 
-  const priorityColors = {};
-  (tableFields.find(f => f.name === 'Priority')?.options?.choices || []).forEach(c => {
-    priorityColors[c.name] = c.color;
+  // Priority and Status get a colored pill using that field's own Airtable
+  // choice colors — kept to just these two so the table doesn't turn into
+  // a wall of colored badges for every select column (Branch, Size, etc.).
+  const PILL_COLUMNS = new Set(['Priority', 'Status']);
+  const selectColors = {};
+  tableFields.forEach(f => {
+    if (f.type !== 'singleSelect' || !PILL_COLUMNS.has(f.name)) return;
+    const map = {};
+    (f.options?.choices || []).forEach(c => { map[c.name] = c.color; });
+    selectColors[f.name] = map;
   });
 
   const table = document.createElement('table');
@@ -519,11 +527,11 @@ function render() {
     cols.forEach(col => {
       const td = tr.insertCell();
       const val = rec.fields[col];
-      if (col === 'Priority' && val) {
+      if (selectColors[col] && val) {
         const pill = document.createElement('span');
-        pill.className = 'priority-pill';
+        pill.className = 'select-pill';
         pill.textContent = val;
-        const swatch = airtableColorToCss(priorityColors[val]);
+        const swatch = airtableColorToCss(selectColors[col][val]);
         if (swatch) { pill.style.background = swatch.bg; pill.style.color = swatch.text; }
         td.appendChild(pill);
         return;
@@ -794,13 +802,20 @@ function closeRecordModal() {
 // Lets a user hide fields they don't care about (e.g. the long list of
 // per-network status columns) from the task detail view. Per-table, saved
 // to this computer only (localStorage) — doesn't affect Airtable itself.
-function openFieldSettings(tableName) {
+function openFieldSettings(tableName, { columnsOnly = false } = {}) {
   if (!tableName) return;
   document.getElementById('field-settings-table-name').textContent = tableName;
+  document.getElementById('field-settings-desc').textContent = columnsOnly
+    ? "Uncheck columns you don't need in the table view. Saved on this computer only."
+    : "Uncheck fields you don't want to see when opening a task. Saved on this computer only.";
   const list = document.getElementById('field-settings-list');
   list.innerHTML = '';
   const hidden = new Set(state.hiddenFields[tableName] || []);
-  const fields = state.tables[tableName]?.fields || [];
+  const allFields = state.tables[tableName]?.fields || [];
+  const tableFieldNames = allFields.map(f => f.name);
+  const fields = columnsOnly
+    ? COLUMNS.filter(name => tableFieldNames.includes(name)).map(name => allFields.find(f => f.name === name))
+    : allFields;
   fields.forEach(field => {
     const lbl = document.createElement('label');
     lbl.className = 'field-settings-item';
@@ -813,6 +828,7 @@ function openFieldSettings(tableName) {
       state.hiddenFields[tableName] = [...set];
       localStorage.setItem('higgtable_hidden_fields', JSON.stringify(state.hiddenFields));
       if (currentDetailRecord && currentDetailTable === tableName) renderRecordModal(currentDetailRecord, tableName);
+      if (state.activeTable === tableName) render();
     };
     lbl.appendChild(cb);
     lbl.appendChild(document.createTextNode(' ' + field.name));
@@ -825,6 +841,13 @@ function closeFieldSettings() {
   document.getElementById('field-settings-modal').classList.add('hidden');
 }
 
+// These are what a designer actually fills in when wrapping up a task —
+// pinned to the top of the modal, in a compact card, so they don't have to
+// scroll past Description/REF/Date/Format/Priority/Status to find them.
+// The short ones sit in a grid; links/attachments need the full width.
+const PINNED_GRID_FIELDS = ['Hours', 'Date Done', 'Timing'];
+const PINNED_STACK_FIELDS = ['Preview', 'Creative Link', 'Figma/Canvas link'];
+
 function renderRecordModal(rec, tableName) {
   document.getElementById('record-modal-title').textContent = rec.fields['Name'] || 'Task details';
   const body = document.getElementById('record-modal-body');
@@ -832,7 +855,14 @@ function renderRecordModal(rec, tableName) {
 
   const hidden = new Set(state.hiddenFields[tableName] || []);
   const fields = (state.tables[tableName]?.fields || []).filter(f => !hidden.has(f.name));
-  fields.forEach(field => {
+
+  const byName = new Map(fields.map(f => [f.name, f]));
+  const gridFields = PINNED_GRID_FIELDS.map(name => byName.get(name)).filter(Boolean);
+  const stackFields = PINNED_STACK_FIELDS.map(name => byName.get(name)).filter(Boolean);
+  const pinnedNames = new Set([...gridFields, ...stackFields].map(f => f.name));
+  const rest = fields.filter(f => !pinnedNames.has(f.name));
+
+  const appendFieldRow = (field, container = body) => {
     const row = document.createElement('div');
     row.className = 'record-field-row';
 
@@ -845,8 +875,41 @@ function renderRecordModal(rec, tableName) {
     valueEl.className = 'record-field-value';
     valueEl.appendChild(buildFieldInput(rec, tableName, field, rec.fields[field.name]));
     row.appendChild(valueEl);
-    body.appendChild(row);
-  });
+    container.appendChild(row);
+  };
+
+  if (gridFields.length || stackFields.length) {
+    const card = document.createElement('div');
+    card.className = 'record-wrapup-card';
+
+    const header = document.createElement('div');
+    header.className = 'record-field-section-header';
+    header.textContent = 'Wrap up task';
+    card.appendChild(header);
+
+    if (gridFields.length) {
+      const grid = document.createElement('div');
+      grid.className = 'record-wrapup-grid';
+      gridFields.forEach(field => {
+        const cell = document.createElement('div');
+        cell.className = 'record-wrapup-cell';
+        const label = document.createElement('label');
+        label.textContent = field.name;
+        cell.appendChild(label);
+        const valueEl = document.createElement('div');
+        valueEl.className = 'record-field-value';
+        valueEl.appendChild(buildFieldInput(rec, tableName, field, rec.fields[field.name]));
+        cell.appendChild(valueEl);
+        grid.appendChild(cell);
+      });
+      card.appendChild(grid);
+    }
+
+    stackFields.forEach(field => appendFieldRow(field, card));
+    body.appendChild(card);
+  }
+
+  rest.forEach(field => appendFieldRow(field));
 }
 
 function buildFieldInput(rec, tableName, field, val) {
@@ -1508,6 +1571,7 @@ document.getElementById('record-modal').addEventListener('click', e => {
   if (e.target.id === 'record-modal') closeRecordModal();
 });
 document.getElementById('record-fields-settings-btn').addEventListener('click', () => openFieldSettings(currentDetailTable));
+document.getElementById('columns-btn').addEventListener('click', () => openFieldSettings(state.activeTable, { columnsOnly: true }));
 document.getElementById('field-settings-done-btn').addEventListener('click', closeFieldSettings);
 document.getElementById('field-settings-modal').addEventListener('click', e => {
   if (e.target.id === 'field-settings-modal') closeFieldSettings();

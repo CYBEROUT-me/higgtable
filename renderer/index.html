@@ -22,6 +22,7 @@
         <select id="des-select"><option value="">All</option></select>
       </div>
       <span id="multiselect-hint" title="Shift+click to select a range, Cmd/Ctrl+click to select individual rows">ⓘ multi-select</span>
+      <button id="columns-btn" title="Choose which columns to show">▤ Columns</button>
       <button id="refresh-btn" title="Refresh current table">⟳</button>
       <button id="settings-btn" title="Settings">⚙</button>
     </div>
@@ -110,7 +111,7 @@
   <div id="field-settings-modal" class="modal-overlay hidden">
     <div class="modal-box field-settings-box">
       <h2>Show/hide fields — <span id="field-settings-table-name"></span></h2>
-      <p>Uncheck fields you don't want to see when opening a task. Saved on this computer only.</p>
+      <p id="field-settings-desc">Uncheck fields you don't want to see when opening a task. Saved on this computer only.</p>
       <div id="field-settings-list" class="field-settings-list"></div>
       <div class="modal-actions">
         <button id="field-settings-done-btn" class="primary">Done</button>
