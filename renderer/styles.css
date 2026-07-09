@@ -202,6 +202,14 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .record-field-value select:focus,
 .record-field-value input:focus,
 .record-field-value textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.record-markdown-preview {
+  width: 100%; min-height: 200px; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary);
+  padding: var(--space-3); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.6; cursor: text;
+  white-space: pre-wrap; word-break: break-word;
+}
+.record-markdown-preview:hover { border-color: var(--accent); }
+.record-markdown-preview strong { color: var(--accent); font-weight: 600; }
+.record-markdown-empty { color: var(--text-muted); font-style: italic; }
 .record-field-value input[type=checkbox] { width: auto; }
 .record-multiselect { display: flex; flex-direction: column; gap: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); padding: 2px; }
 .record-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }

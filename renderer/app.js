@@ -967,13 +967,7 @@ function buildFieldInput(rec, tableName, field, val) {
     return inp;
   }
 
-  if (type === 'multilineText' || type === 'richText') {
-    const ta = document.createElement('textarea');
-    ta.rows = 4;
-    ta.value = val == null ? '' : String(val);
-    ta.onblur = () => updateRecordField(rec, tableName, field, ta.value || null, ta);
-    return ta;
-  }
+  if (type === 'multilineText' || type === 'richText') return buildMarkdownField(rec, tableName, field, val);
 
   // Fallback for singleLineText, url, email, phoneNumber, and anything else
   const inp = document.createElement('input');
@@ -981,6 +975,60 @@ function buildFieldInput(rec, tableName, field, val) {
   inp.value = val == null ? '' : String(val);
   inp.onblur = () => updateRecordField(rec, tableName, field, inp.value || null, inp);
   return inp;
+}
+
+// Minimal markdown-lite renderer for long text fields (Description, etc.) —
+// just **bold** and line breaks, matching how these fields are actually
+// written in Airtable, without pulling in a full markdown library.
+function renderMarkdownLite(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+// Shows rendered markdown by default; clicking swaps to a plain textarea
+// for editing, and blurring re-renders. Tall by default since these are
+// often multi-paragraph creative briefs.
+function buildMarkdownField(rec, tableName, field, val) {
+  const wrap = document.createElement('div');
+  wrap.className = 'record-markdown-field';
+
+  const preview = document.createElement('div');
+  preview.className = 'record-markdown-preview';
+
+  const ta = document.createElement('textarea');
+  ta.className = 'record-markdown-textarea hidden';
+  ta.rows = 10;
+  ta.value = val == null ? '' : String(val);
+
+  const renderPreview = () => {
+    preview.innerHTML = ta.value
+      ? renderMarkdownLite(ta.value)
+      : '<span class="record-markdown-empty">Click to add...</span>';
+  };
+  const showEditor = () => {
+    preview.classList.add('hidden');
+    ta.classList.remove('hidden');
+    ta.focus();
+  };
+  const showPreview = () => {
+    renderPreview();
+    ta.classList.add('hidden');
+    preview.classList.remove('hidden');
+  };
+
+  preview.onclick = showEditor;
+  ta.onblur = () => {
+    updateRecordField(rec, tableName, field, ta.value || null, ta);
+    showPreview();
+  };
+
+  renderPreview();
+  wrap.appendChild(preview);
+  wrap.appendChild(ta);
+  return wrap;
 }
 
 function formatReadonlyValue(val) {
