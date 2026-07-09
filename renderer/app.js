@@ -1,7 +1,33 @@
 const TARGET_BASE = 'UT Marketing Team';
 const TARGET_TABLES = ['VCP Creatives', 'PLM Creatives', 'CMC Creatives', 'LB Creatives'];
 const DEFAULT_STATUSES = ['In work', 'Ready for Design'];
-const COLUMNS = ['Name', 'Branch', 'Model ID', 'Script ID', 'Size', 'CP', 'DES', 'Format', 'Network', 'Type', 'Language', 'Status'];
+const COLUMNS = ['Name', 'Priority', 'Deadline', 'Branch', 'Model ID', 'Script ID', 'Size', 'CP', 'DES', 'Format', 'Network', 'Type', 'Language', 'Status'];
+const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
+
+// Airtable single-select colors are "<hue><Light2|Light1|Bright|Dark1>"
+// (e.g. "greenBright") — map that pattern to CSS instead of hardcoding every
+// option's color, so any select field's choices render consistently.
+const AIRTABLE_HUES = {
+  blue: 217, cyan: 192, teal: 172, green: 130, yellow: 48,
+  orange: 28, red: 355, pink: 320, purple: 265, gray: 210,
+};
+const AIRTABLE_SHADES = {
+  Light2: { s: 70, l: 90 },
+  Light1: { s: 72, l: 80 },
+  Bright: { s: 78, l: 48 },
+  Dark1:  { s: 55, l: 30 },
+};
+function airtableColorToCss(colorSlug) {
+  const m = colorSlug && colorSlug.match(/^([a-z]+)(Light2|Light1|Bright|Dark1)$/);
+  if (!m) return null;
+  const [, hue, shade] = m;
+  const hDeg = AIRTABLE_HUES[hue];
+  if (hDeg === undefined) return null;
+  const { s, l } = AIRTABLE_SHADES[shade];
+  const sat = hue === 'gray' ? Math.round(s / 6) : s;
+  const textDark = shade === 'Light2' || shade === 'Light1';
+  return { bg: `hsl(${hDeg}, ${sat}%, ${l}%)`, text: textDark ? '#1a1a1a' : '#ffffff' };
+}
 
 const state = {
   baseId: null,
@@ -415,13 +441,24 @@ function render() {
       && (state.activeStatuses.size === 0 || state.activeStatuses.has(status));
   });
 
-  if (state.sortCol) {
-    filtered.sort((a, b) => {
-      const av = String(a.fields[state.sortCol] || '');
-      const bv = String(b.fields[state.sortCol] || '');
-      return state.sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-    });
-  }
+  // Base sort is always Priority, then Deadline — the user's chosen column
+  // (Name by default) only breaks ties within that.
+  filtered.sort((a, b) => {
+    const pa = PRIORITY_RANK[a.fields['Priority']] ?? 3;
+    const pb = PRIORITY_RANK[b.fields['Priority']] ?? 3;
+    if (pa !== pb) return pa - pb;
+
+    const da = a.fields['Deadline'] || '';
+    const db = b.fields['Deadline'] || '';
+    if (da !== db) return !da ? 1 : !db ? -1 : (da < db ? -1 : 1);
+
+    const col = state.sortCol || 'Name';
+    const dir = state.sortCol ? state.sortDir : 'asc';
+    const av = String(a.fields[col] || '');
+    const bv = String(b.fields[col] || '');
+    const cmp = av.localeCompare(bv);
+    return dir === 'asc' ? cmp : -cmp;
+  });
 
   const container = document.getElementById('records-container');
   if (!filtered.length) {
@@ -431,8 +468,14 @@ function render() {
     return;
   }
 
-  const fieldNames = (state.tables[state.activeTable]?.fields || []).map(f => f.name);
+  const tableFields = state.tables[state.activeTable]?.fields || [];
+  const fieldNames = tableFields.map(f => f.name);
   const cols = COLUMNS.filter(c => fieldNames.includes(c));
+
+  const priorityColors = {};
+  (tableFields.find(f => f.name === 'Priority')?.options?.choices || []).forEach(c => {
+    priorityColors[c.name] = c.color;
+  });
 
   const table = document.createElement('table');
   const hr = table.createTHead().insertRow();
@@ -476,6 +519,15 @@ function render() {
     cols.forEach(col => {
       const td = tr.insertCell();
       const val = rec.fields[col];
+      if (col === 'Priority' && val) {
+        const pill = document.createElement('span');
+        pill.className = 'priority-pill';
+        pill.textContent = val;
+        const swatch = airtableColorToCss(priorityColors[val]);
+        if (swatch) { pill.style.background = swatch.bg; pill.style.color = swatch.text; }
+        td.appendChild(pill);
+        return;
+      }
       td.textContent = val == null ? '' : Array.isArray(val) ? val.join(', ') : String(val);
       if (col === 'Name') td.title = String(val || '');
     });

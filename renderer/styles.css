@@ -56,6 +56,7 @@ tr.selected td { background: var(--accent-bg) !important; border-left: 2px solid
 tr.bulk-selected td { background: rgba(79, 214, 173, 0.08); }
 tr.bulk-selected:hover td { background: rgba(79, 214, 173, 0.14); }
 tr.highlight-flash td { animation: flash-highlight 1.4s ease-out 2; }
+.priority-pill { display: inline-block; padding: 2px var(--space-3); border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 @keyframes flash-highlight { 0% { background: rgba(79, 214, 173, 0.45); } 100% { background: transparent; } }
 .empty { padding: var(--space-7); color: var(--text-muted); font-style: italic; text-align: center; margin-top: 40px; }
 .error { color: #f66; }
