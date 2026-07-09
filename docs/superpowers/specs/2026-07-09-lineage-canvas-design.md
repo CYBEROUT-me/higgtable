@@ -7,7 +7,9 @@
 
 Creatives in Airtable form chains of iteration: a `NEW` creative gets revised into `VAR`/`ITR`/`NOD` follow-ups, which themselves get revised again. This lineage is currently only visible by manually following the `Old ID` → `New ID` links field-by-field inside Airtable. There's no way to see a whole chain's shape (how many branches, how deep, what happened to each branch) at a glance.
 
-`Old ID` semantics (per the field's own Airtable description): it holds the `New ID` of the existing creative a record continues/refines. For root (`NEW`-type) creatives, `Old ID` duplicates `New ID` — i.e. a root's Old ID equals its own New ID.
+`Old ID` semantics (per the field's own Airtable description): it holds the `New ID` of the existing creative a record continues/refines. For a truly original creative — no lineage at all — `Old ID` duplicates `New ID`, i.e. a root's Old ID equals its own New ID.
+
+**Root detection is based only on comparing the `Old ID`/`New ID` field values — never on the `Type` field.** A record can be labeled `Type = NEW` while still having a real parent: `Type` describes the creative's category/workflow stage, not its lineage. A `NEW`-typed record only counts as a root when its Old ID equals its own New ID; if its Old ID points elsewhere, it's a real child of that other creative regardless of what Type says.
 
 ## Goals
 
@@ -30,8 +32,8 @@ Given the active table's `state.records`, build two lookups once per Canvas-tab 
 - `byNewId: Map<string, record>` — keyed by each record's `New ID` field value.
 - `childrenByOldId: Map<string, record[]>` — keyed by `Old ID`, listing every record pointing at that id.
 
-A record is a **chain root** when:
-- its `Old ID` equals its own `New ID` (the documented rule), **or**
+A record is a **chain root** when (checked in this order, `Type` never consulted):
+- its `Old ID` equals its own `New ID`, **or**
 - its `Old ID` is blank/doesn't match any record's `New ID` (dangling reference — treated as its own root rather than dropped, since this is likely pre-existing data entered before Old ID was consistently filled in).
 
 A **chain** is a root plus its full descendant tree, walked recursively via `childrenByOldId`. Chain grouping always includes every record regardless of the currently-active Status filter chips — the point of this view is full history, so filtering by status would fracture chains into disconnected pieces.
