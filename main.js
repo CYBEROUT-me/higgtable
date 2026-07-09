@@ -100,6 +100,51 @@ function parseMp4Boxes(fd, start, end, buf) {
   return null;
 }
 
+function getMp4DurationSeconds(filePath) {
+  const buf = Buffer.alloc(8);
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const size = fs.statSync(filePath).size;
+    const result = findMvhdDuration(fd, 0, size, buf);
+    if (result == null) throw new Error('Could not find duration in file');
+    return result;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+// mvhd (movie header) lives directly under moov and holds the file's
+// overall duration as duration/timescale — unlike tkhd's dimensions, it
+// doesn't need to recurse into individual tracks.
+function findMvhdDuration(fd, start, end, buf) {
+  let pos = start;
+  while (pos < end - 8) {
+    fs.readSync(fd, buf, 0, 8, pos);
+    const size = buf.readUInt32BE(0);
+    const type = buf.slice(4, 8).toString('ascii');
+    if (size < 8) break;
+    if (type === 'moov') {
+      const found = findMvhdDuration(fd, pos + 8, pos + size, buf);
+      if (found != null) return found;
+    } else if (type === 'mvhd') {
+      const mvhd = Buffer.alloc(size);
+      fs.readSync(fd, mvhd, 0, size, pos);
+      const ver = mvhd[8];
+      if (ver === 1) {
+        const timescale = mvhd.readUInt32BE(28);
+        const duration = mvhd.readBigUInt64BE(32);
+        return timescale > 0 ? Number(duration) / timescale : null;
+      }
+      const timescale = mvhd.readUInt32BE(20);
+      const duration = mvhd.readUInt32BE(24);
+      return timescale > 0 ? duration / timescale : null;
+    }
+    pos += size;
+  }
+  return null;
+}
+
 // ── Auto-update ────────────────────────────────────────────────────────
 // Windows: electron-updater silently downloads and installs the next
 // version. macOS: the app isn't code-signed (no paid Apple Developer
@@ -302,8 +347,8 @@ ipcMain.handle('pick-directory', async () => {
 });
 
 // Walks the working directory once and returns a map of the requested
-// filenames to their full path, so "Set Previews" doesn't re-scan the
-// filesystem once per task.
+// filenames to their full path, so "Autofill" doesn't re-scan the
+// filesystem once per task per asset type (preview image, 9x16 video, ...).
 function walkDirCollecting(dir, wanted, found) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -314,20 +359,25 @@ function walkDirCollecting(dir, wanted, found) {
   }
 }
 
-ipcMain.handle('find-preview-files', (_e, dir, filenames) => {
+ipcMain.handle('find-asset-files', (_e, dir, filenames) => {
   const wanted = new Set(filenames);
   const found = {};
   walkDirCollecting(dir, wanted, found);
   return found;
 });
 
-// For the "Set Previews" approval modal — lets it show a thumbnail before upload.
+// For the Autofill approval modal — lets it show a thumbnail before upload.
 ipcMain.handle('read-image-data-url', (_e, filePath) => {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = IMAGE_CONTENT_TYPES[ext];
   if (!contentType) throw new Error(`Not a supported image file: ${ext}`);
   const buf = fs.readFileSync(filePath);
   return `data:${contentType};base64,${buf.toString('base64')}`;
+});
+
+ipcMain.handle('get-video-duration', (_e, filePath) => {
+  try { return getMp4DurationSeconds(filePath); }
+  catch (err) { throw new Error(err.message); }
 });
 
 ipcMain.handle('get-file-dimensions', (_e, filePath) => {

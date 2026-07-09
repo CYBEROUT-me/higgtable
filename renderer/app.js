@@ -1323,15 +1323,36 @@ async function performRename() {
 }
 
 // A task's "Name" field includes its own aspect-ratio suffix (e.g. "..._9x16"),
-// so the 1x1 preview file for it lives at "<name minus suffix>_1x1.png"
+// so its assets live at "<name minus suffix>_1x1.png" (Preview image) and
+// "<name minus suffix>_9x16.mp4" (used to derive Timing from duration)
 // somewhere under the working directory (searched recursively) — mirrors the
 // auto-upload-on-rename convention in performRename() above, but runs over
 // whichever tasks the user Shift/Cmd-click-selected, with a review step
-// before anything is actually uploaded to Airtable.
+// before anything is actually written to Airtable.
 
-let pendingPreviewCandidates = [];
+// Airtable's "Timing" options mix ranges ("15-30s") with exact markers
+// ("30s") for creatives authored to a standard length — a ±0.5s window
+// around the round numbers absorbs normal encoder rounding.
+const TIMING_BUCKETS = [
+  { test: s => s < 10,                re: /^<\s*10\s*s?$/i },
+  { test: s => s >= 10 && s < 15,     re: /^10\s*-\s*15\s*s?$/i },
+  { test: s => s >= 15 && s < 29.5,   re: /^15\s*-\s*30\s*s?$/i },
+  { test: s => s >= 29.5 && s < 30.5, re: /^30\s*s?$/i },
+  { test: s => s >= 30.5 && s < 44.5, re: /^30\s*-\s*45\s*s?$/i },
+  { test: s => s >= 44.5 && s < 45.5, re: /^45\s*s?$/i },
+  { test: s => s >= 45.5 && s < 59.5, re: /^45\s*-\s*60\s*s?$/i },
+  { test: s => s >= 59.5 && s < 60.5, re: /^60\s*s?$/i },
+  { test: s => s >= 60.5,             re: /^>\s*(1m|60\s*s?)$/i },
+];
+function mapDurationToTimingChoice(seconds, choices) {
+  const bucket = TIMING_BUCKETS.find(b => b.test(seconds));
+  if (!bucket) return null;
+  return choices.find(name => bucket.re.test(name.trim())) || null;
+}
 
-async function openSetPreviewsModal() {
+let pendingAutofillCandidates = [];
+
+async function openAutofillModal() {
   if (!state.workingDirectory) {
     alert('Set a working directory first (⚙ Settings).');
     return;
@@ -1341,108 +1362,171 @@ async function openSetPreviewsModal() {
   const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
   if (!records.length) return;
 
-  const btn = document.getElementById('bulk-set-previews-btn');
+  const timingChoices = (state.tables[state.activeTable]?.fields || [])
+    .find(f => f.name === 'Timing')?.options?.choices?.map(c => c.name) || [];
+
+  const btn = document.getElementById('bulk-autofill-btn');
   btn.disabled = true;
   btn.textContent = 'Searching...';
   try {
-    const wanted = records.map(r => `${stripAspectRatio(r.fields['Name'])}_1x1.png`);
-    log(`openSetPreviewsModal: searching ${state.workingDirectory} for ${wanted.length} file(s)`);
-    const found = await window.app.findPreviewFiles(state.workingDirectory, wanted);
-
-    pendingPreviewCandidates = records.map(rec => {
-      const filename = `${stripAspectRatio(rec.fields['Name'])}_1x1.png`;
-      return { rec, filename, path: found[filename] || null, include: !!found[filename] };
+    const wanted = records.flatMap(r => {
+      const base = stripAspectRatio(r.fields['Name']);
+      return [`${base}_1x1.png`, `${base}_9x16.mp4`];
     });
+    log(`openAutofillModal: searching ${state.workingDirectory} for ${wanted.length} file(s)`);
+    const found = await window.app.findAssetFiles(state.workingDirectory, wanted);
 
-    if (!pendingPreviewCandidates.some(c => c.path)) {
-      alert('No matching "_1x1.png" files found for the selected tasks.');
+    btn.textContent = 'Checking video lengths...';
+    pendingAutofillCandidates = await Promise.all(records.map(async rec => {
+      const base = stripAspectRatio(rec.fields['Name']);
+      const previewFilename = `${base}_1x1.png`;
+      const videoFilename = `${base}_9x16.mp4`;
+      const previewPath = found[previewFilename] || null;
+      const videoPath = found[videoFilename] || null;
+
+      const preview = previewPath ? { filename: previewFilename, path: previewPath, include: true } : null;
+
+      let timing = null;
+      if (videoPath && timingChoices.length) {
+        const seconds = await window.app.getVideoDuration(videoPath).catch(() => null);
+        const choice = seconds != null ? mapDurationToTimingChoice(seconds, timingChoices) : null;
+        if (choice) timing = { filename: videoFilename, path: videoPath, seconds, choice, include: true };
+      }
+
+      return { rec, preview, timing };
+    }));
+
+    if (!pendingAutofillCandidates.some(c => c.preview || c.timing)) {
+      alert('No matching "_1x1.png" or "_9x16.mp4" files found for the selected tasks.');
       return;
     }
 
-    await renderPreviewApprovalList();
-    document.getElementById('preview-approval-modal').classList.remove('hidden');
+    await renderAutofillApprovalList();
+    document.getElementById('autofill-approval-modal').classList.remove('hidden');
   } catch (err) {
-    alert(`Set Previews failed: ${err.message}`);
-    log(`openSetPreviewsModal: FAILED — ${err.message}`);
+    alert(`Autofill failed: ${err.message}`);
+    log(`openAutofillModal: FAILED — ${err.message}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Set Previews';
+    btn.textContent = 'Autofill';
   }
 }
 
-async function renderPreviewApprovalList() {
-  const list = document.getElementById('preview-approval-list');
+async function renderAutofillApprovalList() {
+  const list = document.getElementById('autofill-approval-list');
   list.innerHTML = '';
 
-  const thumbs = await Promise.all(pendingPreviewCandidates.map(c =>
-    c.path ? window.app.readImageDataUrl(c.path).catch(() => null) : Promise.resolve(null)
+  const thumbs = await Promise.all(pendingAutofillCandidates.map(c =>
+    c.preview ? window.app.readImageDataUrl(c.preview.path).catch(() => null) : Promise.resolve(null)
   ));
 
-  pendingPreviewCandidates.forEach((c, i) => {
+  pendingAutofillCandidates.forEach((c, i) => {
+    const hasMatch = c.preview || c.timing;
     const row = document.createElement('div');
-    row.className = 'preview-approval-row' + (c.path ? '' : ' no-match');
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = c.include;
-    checkbox.disabled = !c.path;
-    checkbox.addEventListener('change', () => { c.include = checkbox.checked; });
-    row.appendChild(checkbox);
+    row.className = 'autofill-approval-row' + (hasMatch ? '' : ' no-match');
 
     const img = document.createElement('img');
-    img.className = 'preview-approval-thumb';
+    img.className = 'autofill-approval-thumb';
     if (thumbs[i]) img.src = thumbs[i];
     row.appendChild(img);
 
     const info = document.createElement('div');
-    info.className = 'preview-approval-info';
+    info.className = 'autofill-approval-info';
     const task = document.createElement('div');
-    task.className = 'preview-approval-task';
+    task.className = 'autofill-approval-task';
     task.textContent = c.rec.fields['Name'];
-    const file = document.createElement('div');
-    file.className = 'preview-approval-file';
-    file.textContent = c.path ? c.filename : 'No match found';
-    if (c.path) file.title = c.path;
     info.appendChild(task);
-    info.appendChild(file);
-    row.appendChild(info);
 
+    const buildLine = (checked, tag, text, onToggle) => {
+      const line = document.createElement('label');
+      line.className = 'autofill-approval-line';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      cb.addEventListener('change', () => onToggle(cb.checked));
+      line.appendChild(cb);
+      const tagEl = document.createElement('span');
+      tagEl.className = 'autofill-approval-line-tag';
+      tagEl.textContent = tag;
+      line.appendChild(tagEl);
+      const textEl = document.createElement('span');
+      textEl.className = 'autofill-approval-line-text';
+      textEl.textContent = text;
+      line.appendChild(textEl);
+      return line;
+    };
+
+    if (c.preview) {
+      info.appendChild(buildLine(c.preview.include, 'Preview', c.preview.filename, v => { c.preview.include = v; }));
+    }
+
+    if (c.timing) {
+      info.appendChild(buildLine(c.timing.include, 'Timing', `${c.timing.choice} (${c.timing.seconds.toFixed(1)}s)`, v => { c.timing.include = v; }));
+    }
+
+    if (!hasMatch) {
+      const line = document.createElement('div');
+      line.className = 'autofill-approval-line autofill-approval-line-empty';
+      line.textContent = 'No match found';
+      info.appendChild(line);
+    }
+
+    row.appendChild(info);
     list.appendChild(row);
   });
 }
 
-function closePreviewApprovalModal() {
-  document.getElementById('preview-approval-modal').classList.add('hidden');
-  pendingPreviewCandidates = [];
+function closeAutofillModal() {
+  document.getElementById('autofill-approval-modal').classList.add('hidden');
+  pendingAutofillCandidates = [];
 }
 
-async function confirmSetPreviews() {
-  const toUpload = pendingPreviewCandidates.filter(c => c.include && c.path);
-  if (!toUpload.length) { closePreviewApprovalModal(); return; }
+async function confirmAutofill() {
+  const toUpload = pendingAutofillCandidates.filter(c => c.preview?.include && c.preview.path);
+  const toSetTiming = pendingAutofillCandidates.filter(c => c.timing?.include && c.timing.choice);
+  if (!toUpload.length && !toSetTiming.length) { closeAutofillModal(); return; }
 
-  const btn = document.getElementById('preview-approval-confirm-btn');
+  const btn = document.getElementById('autofill-approval-confirm-btn');
   btn.disabled = true;
-  btn.textContent = 'Uploading...';
-  let uploaded = 0, failed = 0;
+  btn.textContent = 'Applying...';
+  let uploaded = 0, uploadFailed = 0, timed = 0;
   try {
     for (const c of toUpload) {
       try {
-        const result = await window.airtable.uploadAttachment(state.baseId, c.rec.id, 'Preview', c.path);
+        const result = await window.airtable.uploadAttachment(state.baseId, c.rec.id, 'Preview', c.preview.path);
         c.rec.fields['Preview'] = result.fields['Preview'];
         uploaded++;
-        log(`confirmSetPreviews: uploaded ${c.path} to ${c.rec.fields['Name']}`);
+        log(`confirmAutofill: uploaded ${c.preview.path} to ${c.rec.fields['Name']}`);
       } catch (err) {
-        failed++;
-        log(`confirmSetPreviews: FAILED for ${c.rec.fields['Name']} — ${err.message}`);
+        uploadFailed++;
+        log(`confirmAutofill: preview upload FAILED for ${c.rec.fields['Name']} — ${err.message}`);
       }
     }
+
+    if (toSetTiming.length) {
+      const tableInfo = state.tables[state.activeTable];
+      const updates = toSetTiming.map(c => ({ id: c.rec.id, fields: { Timing: c.timing.choice } }));
+      try {
+        const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
+        const byId = new Map(results.map(r => [r.id, r]));
+        toSetTiming.forEach(c => {
+          const updated = byId.get(c.rec.id);
+          if (updated) c.rec.fields = updated.fields;
+        });
+        timed = results.length;
+        log(`confirmAutofill: set Timing on ${timed} record(s)`);
+      } catch (err) {
+        log(`confirmAutofill: Timing update FAILED — ${err.message}`);
+      }
+    }
+
     render();
     maybeRefreshDashboard();
-    alert(`Set Previews done.\n\nUploaded: ${uploaded}${failed ? `\nFailed: ${failed}` : ''}`);
+    alert(`Autofill done.\n\nPreviews uploaded: ${uploaded}${uploadFailed ? `\nPreview upload failed: ${uploadFailed}` : ''}\nTiming set: ${timed}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Upload Selected';
-    closePreviewApprovalModal();
+    btn.textContent = 'Apply Selected';
+    closeAutofillModal();
   }
 }
 
@@ -1522,19 +1606,19 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 });
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
-document.getElementById('bulk-set-previews-btn').addEventListener('click', () => {
-  if (document.getElementById('bulk-set-previews-btn').disabled) return;
-  openSetPreviewsModal();
+document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-autofill-btn').disabled) return;
+  openAutofillModal();
 });
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   state.selectedIds.clear();
   render();
 });
 
-document.getElementById('preview-approval-confirm-btn').addEventListener('click', confirmSetPreviews);
-document.getElementById('preview-approval-cancel-btn').addEventListener('click', closePreviewApprovalModal);
-document.getElementById('preview-approval-modal').addEventListener('click', e => {
-  if (e.target.id === 'preview-approval-modal') closePreviewApprovalModal();
+document.getElementById('autofill-approval-confirm-btn').addEventListener('click', confirmAutofill);
+document.getElementById('autofill-approval-cancel-btn').addEventListener('click', closeAutofillModal);
+document.getElementById('autofill-approval-modal').addEventListener('click', e => {
+  if (e.target.id === 'autofill-approval-modal') closeAutofillModal();
 });
 
 document.getElementById('dashboard-controls').addEventListener('click', e => {
