@@ -104,6 +104,15 @@ function renderChainList() {
     count.textContent = size === 1 ? '1 creative' : `${size} creatives`;
     row.appendChild(name);
     row.appendChild(count);
+    const statusVal = root.record.fields['Status'];
+    if (statusVal) {
+      const statusPill = document.createElement('span');
+      statusPill.className = 'select-pill';
+      statusPill.textContent = statusVal;
+      const swatch = singleSelectSwatch(state.activeTable, 'Status', statusVal);
+      if (swatch) { statusPill.style.background = swatch.bg; statusPill.style.color = swatch.text; }
+      row.appendChild(statusPill);
+    }
     row.onclick = () => openChain(root);
     container.appendChild(row);
   });
@@ -192,12 +201,12 @@ function renderCanvas(root, highlightRecordId) {
 
   const cardsLayer = document.getElementById('canvas-cards');
   cardsLayer.innerHTML = '';
-  let highlightEl = null;
+  let highlightPos = null;
   positions.forEach(({ node, x, y }) => {
     const card = buildCanvasCard(node.record, x, y);
     if (highlightRecordId && node.record.id === highlightRecordId) {
       card.classList.add('highlight-flash');
-      highlightEl = card;
+      highlightPos = { x, y };
     }
     cardsLayer.appendChild(card);
   });
@@ -222,8 +231,13 @@ function renderCanvas(root, highlightRecordId) {
     svg.appendChild(path);
   });
 
-  if (highlightEl) {
-    highlightEl.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+  if (highlightPos) {
+    const viewport = document.getElementById('canvas-viewport');
+    const cardCenterX = highlightPos.x + CANVAS_CARD_WIDTH / 2;
+    const cardCenterY = highlightPos.y + CANVAS_CARD_HEIGHT / 2;
+    canvasPanX = viewport.clientWidth / 2 - cardCenterX * canvasZoom;
+    canvasPanY = viewport.clientHeight / 2 - cardCenterY * canvasZoom;
+    renderCanvasTransform();
   }
 }
 
