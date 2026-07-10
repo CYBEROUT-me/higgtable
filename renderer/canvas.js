@@ -4,6 +4,48 @@
 // bundler in this project — same pattern app.js itself uses). See:
 // docs/superpowers/specs/2026-07-09-lineage-canvas-design.md
 
+let canvasZoom = 1;
+let canvasPanX = 0;
+let canvasPanY = 0;
+let canvasIsDragging = false;
+let canvasDragStartX = 0;
+let canvasDragStartY = 0;
+
+function renderCanvasTransform() {
+  const content = document.getElementById('canvas-content');
+  content.style.transform = `translate(${canvasPanX}px, ${canvasPanY}px) scale(${canvasZoom})`;
+}
+
+document.getElementById('canvas-viewport').addEventListener('mousedown', e => {
+  if (e.target.closest('.canvas-card')) return;
+  canvasIsDragging = true;
+  canvasDragStartX = e.clientX - canvasPanX;
+  canvasDragStartY = e.clientY - canvasPanY;
+});
+document.addEventListener('mousemove', e => {
+  if (!canvasIsDragging) return;
+  canvasPanX = e.clientX - canvasDragStartX;
+  canvasPanY = e.clientY - canvasDragStartY;
+  renderCanvasTransform();
+});
+document.addEventListener('mouseup', () => { canvasIsDragging = false; });
+
+document.getElementById('canvas-viewport').addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  canvasZoom = Math.min(2, Math.max(0.3, canvasZoom + delta));
+  renderCanvasTransform();
+}, { passive: false });
+
+document.getElementById('canvas-zoom-in-btn').addEventListener('click', () => {
+  canvasZoom = Math.min(2, canvasZoom + 0.2);
+  renderCanvasTransform();
+});
+document.getElementById('canvas-zoom-out-btn').addEventListener('click', () => {
+  canvasZoom = Math.max(0.3, canvasZoom - 0.2);
+  renderCanvasTransform();
+});
+
 function showCanvasTab() {
   clearTaskSelection();
   state.selectedIds.clear();
@@ -189,5 +231,9 @@ function openChain(root, highlightRecordId) {
   document.getElementById('canvas-list-view').classList.add('hidden');
   document.getElementById('canvas-tree-view').classList.remove('hidden');
   document.getElementById('canvas-tree-title').textContent = root.record.fields['Name'] || '(untitled)';
+  canvasZoom = 1;
+  canvasPanX = 0;
+  canvasPanY = 0;
+  renderCanvasTransform();
   renderCanvas(root, highlightRecordId);
 }
