@@ -14,6 +14,7 @@
       <button class="tab" data-table="CMC Creatives">CMC</button>
       <button class="tab" data-table="LB Creatives">LB</button>
       <button id="dashboard-btn" class="tab" title="Task completion dashboard">📊 Dashboard</button>
+      <button id="canvas-btn" class="tab" title="Lineage canvas — see how creatives branch from one another">🕸 Canvas</button>
     </nav>
     <div id="controls">
       <div id="status-filters"></div>
@@ -56,6 +57,27 @@
       <button id="dashboard-refresh-btn" title="Refresh dashboard data">⟳</button>
     </div>
     <div id="dashboard-table-area"></div>
+  </div>
+
+  <div id="canvas-container" class="hidden">
+    <div id="canvas-list-view">
+      <p class="dash-controls-label">Lineages in this table</p>
+      <div id="canvas-chain-list"></div>
+    </div>
+    <div id="canvas-tree-view" class="hidden">
+      <div id="canvas-tree-header">
+        <button id="canvas-back-btn" title="Back to lineage list">← Back</button>
+        <span id="canvas-tree-title"></span>
+        <button id="canvas-zoom-out-btn" title="Zoom out">−</button>
+        <button id="canvas-zoom-in-btn" title="Zoom in">+</button>
+      </div>
+      <div id="canvas-viewport">
+        <div id="canvas-content">
+          <svg id="canvas-edges"></svg>
+          <div id="canvas-cards"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="rename-panel" class="hidden">
@@ -101,6 +123,7 @@
     <div class="modal-box record-modal-box">
       <div class="record-modal-header">
         <h2 id="record-modal-title">Task details</h2>
+        <button id="view-lineage-btn" title="See this task's full lineage">🕸 View lineage</button>
         <button id="record-fields-settings-btn" title="Choose which fields to show">⚙</button>
         <button id="record-modal-close" title="Close">×</button>
       </div>
@@ -132,5 +155,7 @@
   </div>
 
   <script src="app.js"></script>
+  <script src="canvas-data.js"></script>
+  <script src="canvas.js"></script>
 </body>
 </html>

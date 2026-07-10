@@ -29,6 +29,17 @@ function airtableColorToCss(colorSlug) {
   return { bg: `hsl(${hDeg}, ${sat}%, ${l}%)`, text: textDark ? '#1a1a1a' : '#ffffff' };
 }
 
+// Looks up the Airtable choice color for a single-select field's current
+// value — factors out what render()'s selectColors computation already
+// does inline, so the lineage canvas can reuse the exact same colors
+// without duplicating the lookup.
+function singleSelectSwatch(tableName, fieldName, value) {
+  if (!value) return null;
+  const field = (state.tables[tableName]?.fields || []).find(f => f.name === fieldName);
+  const choice = field?.options?.choices?.find(c => c.name === value);
+  return choice ? airtableColorToCss(choice.color) : null;
+}
+
 const state = {
   baseId: null,
   tables: {},
@@ -1615,9 +1626,14 @@ document.getElementById('tabs').addEventListener('click', e => {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   if (btn.id === 'dashboard-btn') {
+    hideCanvasTab();
     showDashboard();
+  } else if (btn.id === 'canvas-btn') {
+    hideDashboard();
+    showCanvasTab();
   } else {
     hideDashboard();
+    hideCanvasTab();
     loadTable(btn.dataset.table);
   }
 });

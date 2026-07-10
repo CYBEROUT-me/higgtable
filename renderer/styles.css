@@ -220,3 +220,43 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .record-field-value select.record-chip-add { width: auto; max-width: 220px; font-size: 11px; padding: var(--space-2) var(--space-2); }
 .field-saved { border-color: var(--accent) !important; transition: border-color 0.2s; }
 .field-error { border-color: #f66 !important; }
+
+/* ── Lineage Canvas ──────────────────────────────────────────────────── */
+#canvas-container { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; margin: var(--space-4); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+#canvas-container.hidden { display: none; }
+
+#canvas-list-view { flex: 1; overflow: auto; padding: var(--space-6) var(--space-7); }
+#canvas-list-view.hidden { display: none; }
+#canvas-chain-list { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-4); }
+.canvas-chain-row { display: flex; justify-content: space-between; align-items: center; padding: var(--space-3) var(--space-4); background: var(--bg-surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; }
+.canvas-chain-row:hover { border-color: var(--accent); }
+.canvas-chain-name { color: var(--text-primary); font-size: 12px; }
+.canvas-chain-count { color: var(--text-muted); font-size: 11px; }
+
+#canvas-tree-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#canvas-tree-view.hidden { display: none; }
+#canvas-tree-header { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+#canvas-tree-title { flex: 1; color: var(--text-primary); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#canvas-viewport { flex: 1; overflow: hidden; position: relative; cursor: grab; background: var(--bg-app); min-height: 0; }
+#canvas-viewport:active { cursor: grabbing; }
+#canvas-content { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+#canvas-edges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+.canvas-edge { fill: none; stroke-width: 2; stroke: var(--border-strong); opacity: 0.7; }
+
+#canvas-cards { position: absolute; top: 0; left: 0; }
+.canvas-card {
+  position: absolute; width: 220px; height: 110px; background: var(--bg-surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-3); cursor: pointer;
+  display: flex; gap: var(--space-3); overflow: hidden;
+}
+.canvas-card:hover { border-color: var(--accent); }
+.canvas-card.highlight-flash { animation: canvas-card-flash 1.4s ease-out 2; }
+@keyframes canvas-card-flash { 0% { background: rgba(79, 214, 173, 0.45); } 100% { background: var(--bg-surface); } }
+
+.canvas-card-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: var(--radius-sm); background: var(--bg-app); border: 1px solid var(--border); flex-shrink: 0; }
+.canvas-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.canvas-card-top { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.canvas-card-type { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); }
+.canvas-card-name { font-size: 11px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.canvas-card-meta, .canvas-card-network { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
