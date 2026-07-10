@@ -4,6 +4,11 @@
 // <script> in the renderer. See:
 // docs/superpowers/specs/2026-07-09-lineage-canvas-design.md
 
+const CANVAS_CARD_WIDTH = 220;
+const CANVAS_CARD_HEIGHT = 110;
+const CANVAS_COL_GAP = 80;
+const CANVAS_ROW_GAP = 24;
+
 // A record is a chain root when compared purely by Old ID/New ID values —
 // the Type field is never consulted (a Type=NEW record can still have a
 // real parent). `byNewId` maps every record's New ID (as a string) to
@@ -65,6 +70,48 @@ function buildChains(records) {
     .map(root => buildNode(root, new Set()));
 }
 
+// Assigns {x, y} (top-left, px) to every node in a tree returned by
+// buildChains() — left-to-right by generation (x), siblings stacked
+// top-to-bottom (y), parent vertically centered on its children's span.
+// Pure function: computed from the tree's shape alone, no DOM involved.
+function layoutChain(root) {
+  const positions = [];
+
+  function subtreeHeight(node) {
+    if (!node.children.length) return CANVAS_CARD_HEIGHT;
+    const total = node.children.reduce((sum, child) => sum + subtreeHeight(child), 0);
+    return total + CANVAS_ROW_GAP * (node.children.length - 1);
+  }
+
+  // Returns the vertical center (px) of the node it just placed, so the
+  // caller (its parent) can average its children's centers.
+  function place(node, depth, top) {
+    const x = depth * (CANVAS_CARD_WIDTH + CANVAS_COL_GAP);
+
+    if (!node.children.length) {
+      positions.push({ node, x, y: top });
+      return top + CANVAS_CARD_HEIGHT / 2;
+    }
+
+    let childTop = top;
+    const childCenters = node.children.map(child => {
+      const center = place(child, depth + 1, childTop);
+      childTop += subtreeHeight(child) + CANVAS_ROW_GAP;
+      return center;
+    });
+
+    const y = (childCenters[0] + childCenters[childCenters.length - 1]) / 2 - CANVAS_CARD_HEIGHT / 2;
+    positions.push({ node, x, y });
+    return y + CANVAS_CARD_HEIGHT / 2;
+  }
+
+  place(root, 0, 0);
+  return positions;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isChainRoot, buildChains };
+  module.exports = {
+    isChainRoot, buildChains, layoutChain,
+    CANVAS_CARD_WIDTH, CANVAS_CARD_HEIGHT, CANVAS_COL_GAP, CANVAS_ROW_GAP,
+  };
 }

@@ -1,5 +1,5 @@
 // tests/canvas-data.test.js
-const { buildChains } = require('../renderer/canvas-data');
+const { buildChains, layoutChain, CANVAS_CARD_HEIGHT } = require('../renderer/canvas-data');
 
 function rec(id, newId, oldId, extra = {}) {
   return { id, fields: { 'New ID': newId, 'Old ID': oldId, Name: id, ...extra } };
@@ -84,4 +84,37 @@ test('multiple independent chains in the same table stay separate', () => {
   const childA = rec('childA', '101', '100');
   const chains = buildChains([rootA, rootB, childA]);
   expect(chains).toHaveLength(2);
+});
+
+test('layoutChain positions every node exactly once, children strictly right of their parent', () => {
+  const root = rec('root', '0', '0');
+  const child = rec('child', '1', '0');
+  const chains = buildChains([root, child]);
+  const positions = layoutChain(chains[0]);
+  expect(positions).toHaveLength(2);
+  const rootPos = positions.find(p => p.node.record.id === 'root');
+  const childPos = positions.find(p => p.node.record.id === 'child');
+  expect(childPos.x).toBeGreaterThan(rootPos.x);
+});
+
+test('layoutChain vertically centers a parent between two children', () => {
+  const root = rec('root', '0', '0');
+  const kidA = rec('a', '1', '0');
+  const kidB = rec('b', '2', '0');
+  const chains = buildChains([root, kidA, kidB]);
+  const positions = layoutChain(chains[0]);
+  const rootPos = positions.find(p => p.node.record.id === 'root');
+  const aPos = positions.find(p => p.node.record.id === 'a');
+  const bPos = positions.find(p => p.node.record.id === 'b');
+  const half = CANVAS_CARD_HEIGHT / 2;
+  const rootCenter = rootPos.y + half;
+  const expectedCenter = ((aPos.y + half) + (bPos.y + half)) / 2;
+  expect(rootCenter).toBeCloseTo(expectedCenter, 5);
+});
+
+test('layoutChain on a single-node chain (no children) still returns one position', () => {
+  const chains = buildChains([rec('solo', '5', '5')]);
+  const positions = layoutChain(chains[0]);
+  expect(positions).toHaveLength(1);
+  expect(positions[0].x).toBe(0);
 });
