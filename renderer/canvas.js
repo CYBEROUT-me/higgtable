@@ -231,10 +231,15 @@ function renderCanvas(root, highlightRecordId) {
     svg.appendChild(path);
   });
 
-  if (highlightPos) {
+  // Center the highlighted card if there is one; otherwise center the root
+  // itself, since layoutChain() can place the root anywhere in a bushy
+  // tree's vertical span — without this, opening a large chain from the
+  // list (no highlight) can leave its root scrolled far out of view.
+  const focusPos = highlightPos || positions.find(p => p.node === root);
+  if (focusPos) {
     const viewport = document.getElementById('canvas-viewport');
-    const cardCenterX = highlightPos.x + CANVAS_CARD_WIDTH / 2;
-    const cardCenterY = highlightPos.y + CANVAS_CARD_HEIGHT / 2;
+    const cardCenterX = focusPos.x + CANVAS_CARD_WIDTH / 2;
+    const cardCenterY = focusPos.y + CANVAS_CARD_HEIGHT / 2;
     canvasPanX = viewport.clientWidth / 2 - cardCenterX * canvasZoom;
     canvasPanY = viewport.clientHeight / 2 - cardCenterY * canvasZoom;
     renderCanvasTransform();
