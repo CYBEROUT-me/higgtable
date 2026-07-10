@@ -62,8 +62,132 @@ function renderChainList() {
     count.textContent = size === 1 ? '1 creative' : `${size} creatives`;
     row.appendChild(name);
     row.appendChild(count);
+    row.onclick = () => openChain(root);
     container.appendChild(row);
   });
 }
 
 document.getElementById('canvas-back-btn').addEventListener('click', renderChainList);
+
+// ── Tree rendering ──────────────────────────────────────────────────────
+
+function collectEdges(root) {
+  const edges = [];
+  (function walk(node) {
+    node.children.forEach(child => {
+      edges.push({ parent: node, child });
+      walk(child);
+    });
+  })(root);
+  return edges;
+}
+
+function buildCanvasCard(record, x, y) {
+  const card = document.createElement('div');
+  card.className = 'canvas-card';
+  card.style.left = `${x}px`;
+  card.style.top = `${y}px`;
+  card.title = record.fields['Name'] || '';
+  card.onclick = () => openRecordModal(record, state.activeTable);
+
+  const thumb = document.createElement('img');
+  thumb.className = 'canvas-card-thumb';
+  const previewUrl = record.fields['Preview']?.[0]?.url;
+  if (previewUrl) thumb.src = previewUrl;
+  card.appendChild(thumb);
+
+  const body = document.createElement('div');
+  body.className = 'canvas-card-body';
+
+  const top = document.createElement('div');
+  top.className = 'canvas-card-top';
+  const typeBadge = document.createElement('span');
+  typeBadge.className = 'canvas-card-type';
+  typeBadge.textContent = record.fields['Type'] || '';
+  top.appendChild(typeBadge);
+  const statusVal = record.fields['Status'];
+  if (statusVal) {
+    const statusPill = document.createElement('span');
+    statusPill.className = 'select-pill';
+    statusPill.textContent = statusVal;
+    const swatch = singleSelectSwatch(state.activeTable, 'Status', statusVal);
+    if (swatch) { statusPill.style.background = swatch.bg; statusPill.style.color = swatch.text; }
+    top.appendChild(statusPill);
+  }
+  body.appendChild(top);
+
+  const name = document.createElement('div');
+  name.className = 'canvas-card-name';
+  name.textContent = record.fields['Name'] || '(untitled)';
+  body.appendChild(name);
+
+  const meta = document.createElement('div');
+  meta.className = 'canvas-card-meta';
+  meta.textContent = [record.fields['Model ID'], record.fields['Format']].filter(Boolean).join(' · ');
+  body.appendChild(meta);
+
+  const network = document.createElement('div');
+  network.className = 'canvas-card-network';
+  const nets = record.fields['Network'];
+  network.textContent = Array.isArray(nets) ? nets.join(', ') : (nets || '');
+  body.appendChild(network);
+
+  card.appendChild(body);
+  return card;
+}
+
+function renderCanvas(root, highlightRecordId) {
+  const positions = layoutChain(root);
+  const edges = collectEdges(root);
+  const posByNode = new Map(positions.map(p => [p.node, p]));
+
+  const maxX = Math.max(...positions.map(p => p.x)) + CANVAS_CARD_WIDTH;
+  const maxY = Math.max(...positions.map(p => p.y)) + CANVAS_CARD_HEIGHT;
+
+  const content = document.getElementById('canvas-content');
+  content.style.width = `${maxX}px`;
+  content.style.height = `${maxY}px`;
+
+  const cardsLayer = document.getElementById('canvas-cards');
+  cardsLayer.innerHTML = '';
+  let highlightEl = null;
+  positions.forEach(({ node, x, y }) => {
+    const card = buildCanvasCard(node.record, x, y);
+    if (highlightRecordId && node.record.id === highlightRecordId) {
+      card.classList.add('highlight-flash');
+      highlightEl = card;
+    }
+    cardsLayer.appendChild(card);
+  });
+
+  const svg = document.getElementById('canvas-edges');
+  svg.setAttribute('width', String(maxX));
+  svg.setAttribute('height', String(maxY));
+  svg.innerHTML = '';
+  edges.forEach(({ parent, child }) => {
+    const p1 = posByNode.get(parent);
+    const p2 = posByNode.get(child);
+    const x1 = p1.x + CANVAS_CARD_WIDTH;
+    const y1 = p1.y + CANVAS_CARD_HEIGHT / 2;
+    const x2 = p2.x;
+    const y2 = p2.y + CANVAS_CARD_HEIGHT / 2;
+    const midX = (x1 + x2) / 2;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`);
+    path.setAttribute('class', 'canvas-edge');
+    const swatch = singleSelectSwatch(state.activeTable, 'Status', child.record.fields['Status']);
+    if (swatch) path.setAttribute('stroke', swatch.bg);
+    svg.appendChild(path);
+  });
+
+  if (highlightEl) {
+    highlightEl.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+  }
+}
+
+function openChain(root, highlightRecordId) {
+  document.getElementById('canvas-list-view').classList.add('hidden');
+  document.getElementById('canvas-tree-view').classList.remove('hidden');
+  document.getElementById('canvas-tree-title').textContent = root.record.fields['Name'] || '(untitled)';
+  renderCanvas(root, highlightRecordId);
+}
