@@ -237,3 +237,51 @@ function openChain(root, highlightRecordId) {
   renderCanvasTransform();
   renderCanvas(root, highlightRecordId);
 }
+
+// ── "View lineage" entry point ──────────────────────────────────────────
+
+// Walks from `record` up through Old ID -> New ID until isChainRoot()
+// says to stop (self-referencing, blank Old ID, or a dangling reference).
+// Guards against a malformed cycle the same way buildChains does: if a
+// New ID we've already visited on this walk reappears, stop there instead
+// of looping forever.
+function findRoot(record, byNewId) {
+  const visited = new Set();
+  let current = record;
+  while (!isChainRoot(current, byNewId)) {
+    const newId = current.fields['New ID'];
+    const key = newId == null || newId === '' ? null : String(newId);
+    if (key != null) {
+      if (visited.has(key)) return current;
+      visited.add(key);
+    }
+    current = byNewId.get(String(current.fields['Old ID']));
+  }
+  return current;
+}
+
+function openLineageFor(record) {
+  const byNewId = new Map();
+  state.records.forEach(r => {
+    const id = r.fields['New ID'];
+    if (id != null && id !== '') byNewId.set(String(id), r);
+  });
+
+  const rootRecord = findRoot(record, byNewId);
+  const chains = buildChains(state.records);
+  const rootNode = chains.find(c => c.record.id === rootRecord.id);
+  if (!rootNode) return;
+
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('canvas-btn').classList.add('active');
+  hideDashboard();
+  showCanvasTab();
+  openChain(rootNode, record.id);
+}
+
+document.getElementById('view-lineage-btn').addEventListener('click', () => {
+  if (!currentDetailRecord || !currentDetailTable) return;
+  const record = currentDetailRecord;
+  closeRecordModal();
+  openLineageFor(record);
+});
