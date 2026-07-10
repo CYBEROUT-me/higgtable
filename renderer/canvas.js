@@ -32,7 +32,10 @@ document.addEventListener('mouseup', () => { canvasIsDragging = false; });
 
 document.getElementById('canvas-viewport').addEventListener('wheel', e => {
   e.preventDefault();
-  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  // Proportional to the actual scroll amount, not a fixed step per event —
+  // a trackpad fires many small wheel events per gesture, and a fixed step
+  // made zoom race far too fast for those.
+  const delta = -e.deltaY * 0.001;
   canvasZoom = Math.min(2, Math.max(0.3, canvasZoom + delta));
   renderCanvasTransform();
 }, { passive: false });
