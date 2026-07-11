@@ -32,11 +32,30 @@ document.addEventListener('mouseup', () => { canvasIsDragging = false; });
 
 document.getElementById('canvas-viewport').addEventListener('wheel', e => {
   e.preventDefault();
-  // Proportional to the actual scroll amount, not a fixed step per event —
-  // a trackpad fires many small wheel events per gesture, and a fixed step
-  // made zoom race far too fast for those.
-  const delta = -e.deltaY * 0.001;
-  canvasZoom = Math.min(2, Math.max(0.3, canvasZoom + delta));
+  // Browsers mark pinch-zoom gestures (and ctrl+wheel) with ctrlKey — that's
+  // the only way to tell a trackpad pinch apart from a plain two-finger
+  // scroll, which fires the same wheel event otherwise. Without this check,
+  // ordinary scrolling always zoomed and panning was only possible by
+  // click-dragging.
+  if (e.ctrlKey) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+    // Proportional to the actual scroll amount, not a fixed step per event —
+    // a trackpad fires many small wheel events per gesture, and a fixed step
+    // made zoom race far too fast for those.
+    const delta = -e.deltaY * 0.003;
+    const newZoom = Math.min(2, Math.max(0.3, canvasZoom + delta));
+    // Keep the point under the cursor fixed on screen as zoom changes.
+    const contentX = (cursorX - canvasPanX) / canvasZoom;
+    const contentY = (cursorY - canvasPanY) / canvasZoom;
+    canvasPanX = cursorX - contentX * newZoom;
+    canvasPanY = cursorY - contentY * newZoom;
+    canvasZoom = newZoom;
+  } else {
+    canvasPanX -= e.deltaX;
+    canvasPanY -= e.deltaY;
+  }
   renderCanvasTransform();
 }, { passive: false });
 

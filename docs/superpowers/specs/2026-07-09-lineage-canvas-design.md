@@ -68,8 +68,8 @@ Clicking a card opens the existing record detail modal (`openRecordModal`) — n
 
 ## Interactions
 
-- **Pan**: click-drag on empty canvas background translates the view via a CSS `transform` on the canvas container.
-- **Zoom**: scroll wheel (or +/− buttons) scales that same transform, centered on the cursor position.
+- **Pan**: click-drag on empty canvas background, or two-finger trackpad scroll / mouse wheel, translates the view via a CSS `transform` on the canvas container.
+- **Zoom**: pinch gesture on a trackpad, ctrl+scroll wheel, or the +/− buttons scales that same transform. Wheel-driven zoom is centered on the cursor position; the buttons zoom around the canvas origin.
 - **Connectors**: a single SVG overlay behind the cards, one smooth curved `<path>` per parent→child edge, colored to match the child's Status pill color (subtle, not distracting).
 - Entering via "View lineage" auto-scrolls/centers on the originating card and applies the existing `highlight-flash` CSS animation (already used for notification-driven navigation to a record) so it's easy to spot in a large chain.
 
