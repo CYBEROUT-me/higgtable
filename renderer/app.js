@@ -73,6 +73,56 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 let pollTimer = null;
 let requestCounter = 0;
 
+const SEEN_IDS_KEY = 'higgtable_seen_ids_v1';
+const NOTIFICATIONS_KEY = 'higgtable_notifications_v1';
+
+// Returns { [tableName]: string[] } from the last session, or null if this
+// is the first time the app has ever run (nothing persisted yet).
+function loadPersistedSeenIds() {
+  const raw = localStorage.getItem(SEEN_IDS_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
+function persistSeenIds() {
+  const out = {};
+  TARGET_TABLES.forEach(name => {
+    if (seenTaskIds[name]) out[name] = [...seenTaskIds[name]];
+  });
+  localStorage.setItem(SEEN_IDS_KEY, JSON.stringify(out));
+}
+
+function loadNotifications() {
+  const raw = localStorage.getItem(NOTIFICATIONS_KEY);
+  return raw ? JSON.parse(raw) : [];
+}
+
+function persistNotifications() {
+  localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
+}
+
+// Surfaces anything assigned while the app was closed: diffs the seen-ID
+// set persisted from the last session against what's now in recordsCache,
+// per table, using the same DES filter a live poll already applies. Must
+// run after tables are loaded (recordsCache populated) but before
+// snapshotSeenIds() overwrites the persisted set with the fresh one.
+function runColdStartCatchUp() {
+  const persisted = loadPersistedSeenIds();
+  if (!persisted) return; // first-ever run — no baseline, don't spam
+
+  const missedEntries = TARGET_TABLES.flatMap(name => {
+    const fresh = recordsCache[name] || [];
+    return diffMissedRecords(persisted[name] || [], fresh, state.selectedDES)
+      .map(r => recordToNotification(r, name, Date.now()));
+  });
+  if (!missedEntries.length) return;
+
+  notifications = appendNotificationBatch(notifications, missedEntries);
+  persistNotifications();
+  renderNotificationBell();
+  playNotificationSound();
+  log(`runColdStartCatchUp: ${missedEntries.length} notification(s) for tasks assigned while closed`);
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────
 // Mirrors to DevTools console and to main's log file (visible from a
 // packaged app via window.app.getLogPath()), so slow loads can be diagnosed
@@ -182,6 +232,7 @@ async function init() {
     log(`init: active table ready (${Date.now() - t0}ms elapsed), preloading the rest in background`);
     await preloadOtherTables();
     log(`init: all tables preloaded, total init took ${Date.now() - t0}ms`);
+    runColdStartCatchUp();
     snapshotSeenIds();
     startPolling();
     requestNotificationPermission();
@@ -333,6 +384,7 @@ function snapshotSeenIds() {
   TARGET_TABLES.forEach(name => {
     if (recordsCache[name]) seenTaskIds[name] = new Set(recordsCache[name].map(r => r.id));
   });
+  persistSeenIds();
 }
 
 function startPolling() {
@@ -391,9 +443,10 @@ async function pollOneTable(name) {
   if (prevSeen && state.selectedDES) {
     fresh
       .filter(r => !prevSeen.has(r.id) && (r.fields['DES'] || '') === state.selectedDES)
-      .forEach(r => notifyNewTask(r, name));
+      .forEach(r => { notifyNewTask(r, name); addLiveNotification(r, name); });
   }
   seenTaskIds[name] = new Set(fresh.map(r => r.id));
+  persistSeenIds();
   recordsCache[name] = fresh;
   maybeRefreshDashboard();
 
@@ -419,7 +472,7 @@ function notifyNewTask(rec, tableName) {
 // banner isn't the only record a new task ever existed.
 
 const MUTE_KEY = 'higgtable_notify_muted';
-let notifications = [];
+let notifications = loadNotifications();
 let notifyDropdownOpen = false;
 
 function isNotificationsMuted() {
@@ -498,6 +551,7 @@ function toggleNotificationDropdown() {
   document.getElementById('notify-dropdown').classList.toggle('hidden', !notifyDropdownOpen);
   if (notifyDropdownOpen) {
     notifications = markAllRead(notifications);
+    persistNotifications();
     renderNotificationBell();
     renderNotificationDropdown();
   }
@@ -505,6 +559,7 @@ function toggleNotificationDropdown() {
 
 function addLiveNotification(rec, tableName) {
   notifications = appendNotification(notifications, recordToNotification(rec, tableName, Date.now()));
+  persistNotifications();
   renderNotificationBell();
   if (notifyDropdownOpen) renderNotificationDropdown();
   playNotificationSound();
@@ -1887,5 +1942,7 @@ if (isNotificationsMuted()) {
   document.getElementById('notify-mute-btn').classList.add('muted');
   document.getElementById('notify-mute-btn').textContent = '🔇';
 }
+
+renderNotificationBell();
 
 boot();
