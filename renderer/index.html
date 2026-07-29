@@ -24,6 +24,17 @@
       </div>
       <span id="multiselect-hint" title="Shift+click to select a range, Cmd/Ctrl+click to select individual rows">ⓘ multi-select</span>
       <button id="columns-btn" title="Choose which columns to show">▤ Columns</button>
+      <div id="notifications-control">
+        <button id="notify-mute-btn" title="Mute notification sound">🔊</button>
+        <button id="notify-bell-btn" title="Notifications">
+          🔔
+          <span id="notify-badge" class="hidden">0</span>
+        </button>
+        <div id="notify-dropdown" class="hidden">
+          <div id="notify-dropdown-empty">No notifications yet</div>
+          <div id="notify-dropdown-list"></div>
+        </div>
+      </div>
       <button id="refresh-btn" title="Refresh current table">⟳</button>
       <button id="settings-btn" title="Settings">⚙</button>
     </div>
@@ -154,6 +165,7 @@
     </div>
   </div>
 
+  <script src="notifications-data.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>
   <script src="canvas.js"></script>

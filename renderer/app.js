@@ -413,6 +413,95 @@ function notifyNewTask(rec, tableName) {
   n.onclick = () => { window.focus(); goToRecord(rec, tableName); };
 }
 
+// ── In-app notification bell ───────────────────────────────────────────
+// Runs alongside notifyNewTask's OS banner (unchanged, above) — this adds
+// a persistent, sound-backed, in-app history so a missed/dismissed OS
+// banner isn't the only record a new task ever existed.
+
+const MUTE_KEY = 'higgtable_notify_muted';
+let notifications = [];
+let notifyDropdownOpen = false;
+
+function isNotificationsMuted() {
+  return localStorage.getItem(MUTE_KEY) === 'true';
+}
+
+function toggleMute() {
+  const next = !isNotificationsMuted();
+  localStorage.setItem(MUTE_KEY, String(next));
+  document.getElementById('notify-mute-btn').classList.toggle('muted', next);
+  document.getElementById('notify-mute-btn').textContent = next ? '🔇' : '🔊';
+}
+
+// Synthesizes a short two-tone chime via the Web Audio API — no bundled
+// audio asset to ship or license. No-ops while muted.
+function playNotificationSound() {
+  if (isNotificationsMuted()) return;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const now = ctx.currentTime;
+  [880, 1320].forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    osc.type = 'sine';
+    const start = now + i * 0.09;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.2, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + 0.2);
+  });
+  setTimeout(() => ctx.close(), 500);
+}
+
+function renderNotificationBell() {
+  const badge = document.getElementById('notify-badge');
+  const count = unreadCount(notifications);
+  badge.textContent = String(count);
+  badge.classList.toggle('hidden', count === 0);
+}
+
+function renderNotificationDropdown() {
+  const listEl = document.getElementById('notify-dropdown-list');
+  const emptyEl = document.getElementById('notify-dropdown-empty');
+  emptyEl.classList.toggle('hidden', notifications.length > 0);
+  listEl.innerHTML = '';
+  notifications.forEach(n => {
+    const btn = document.createElement('button');
+    btn.className = `notify-item${n.read ? ' read' : ''}`;
+    const shortTable = n.tableName.replace(' Creatives', '');
+    btn.innerHTML = `<span class="notify-item-time">${new Date(n.timestamp).toLocaleString()}</span>${n.taskName}<span class="notify-item-table">${shortTable}</span>`;
+    btn.addEventListener('click', () => {
+      const rec = (recordsCache[n.tableName] || []).find(r => r.id === n.recordId);
+      if (!rec) {
+        btn.innerHTML = '<em>This task is no longer available.</em>';
+        return;
+      }
+      toggleNotificationDropdown();
+      goToRecord(rec, n.tableName);
+    });
+    listEl.appendChild(btn);
+  });
+}
+
+function toggleNotificationDropdown() {
+  notifyDropdownOpen = !notifyDropdownOpen;
+  document.getElementById('notify-dropdown').classList.toggle('hidden', !notifyDropdownOpen);
+  if (notifyDropdownOpen) {
+    notifications = markAllRead(notifications);
+    renderNotificationBell();
+    renderNotificationDropdown();
+  }
+}
+
+function addLiveNotification(rec, tableName) {
+  notifications = appendNotification(notifications, recordToNotification(rec, tableName, Date.now()));
+  renderNotificationBell();
+  if (notifyDropdownOpen) renderNotificationDropdown();
+  playNotificationSound();
+}
+
 // Jumps straight to a specific record from a notification click: switches to
 // its table, makes sure its Status chip is active (so it isn't hidden by the
 // current filter), and highlights + scrolls to the row once rendered.
@@ -1720,6 +1809,16 @@ document.getElementById('record-modal').addEventListener('click', e => {
 });
 document.getElementById('record-fields-settings-btn').addEventListener('click', () => openFieldSettings(currentDetailTable));
 document.getElementById('columns-btn').addEventListener('click', () => openFieldSettings(state.activeTable, { columnsOnly: true }));
+document.getElementById('notify-bell-btn').addEventListener('click', e => {
+  e.stopPropagation();
+  toggleNotificationDropdown();
+});
+document.getElementById('notify-mute-btn').addEventListener('click', toggleMute);
+document.addEventListener('click', e => {
+  if (!notifyDropdownOpen) return;
+  if (e.target.closest('#notifications-control')) return;
+  toggleNotificationDropdown();
+});
 document.getElementById('field-settings-done-btn').addEventListener('click', closeFieldSettings);
 document.getElementById('field-settings-modal').addEventListener('click', e => {
   if (e.target.id === 'field-settings-modal') closeFieldSettings();
@@ -1774,6 +1873,11 @@ function setRefreshBusy(busy) {
   const btn = document.getElementById('refresh-btn');
   btn.disabled = busy;
   btn.classList.toggle('spinning', busy);
+}
+
+if (isNotificationsMuted()) {
+  document.getElementById('notify-mute-btn').classList.add('muted');
+  document.getElementById('notify-mute-btn').textContent = '🔇';
 }
 
 boot();

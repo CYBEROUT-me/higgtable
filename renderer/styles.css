@@ -45,6 +45,21 @@ nav#tabs { display: flex; gap: var(--space-1); }
 #refresh-btn.spinning { animation: refresh-spin 0.8s linear infinite; }
 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
+#notifications-control { position: relative; display: flex; align-items: center; gap: var(--space-1); }
+#notify-mute-btn, #notify-bell-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: var(--space-1) var(--space-2); line-height: 1; position: relative; }
+#notify-mute-btn:hover, #notify-bell-btn:hover { color: var(--text-primary); }
+#notify-mute-btn.muted { opacity: 0.4; }
+#notify-badge { position: absolute; top: -2px; right: -2px; background: var(--accent); color: #0a0a0a; font-size: 9px; font-weight: 700; line-height: 1; padding: 2px 4px; border-radius: 999px; min-width: 14px; text-align: center; }
+#notify-dropdown { position: absolute; top: calc(100% + var(--space-2)); right: 0; width: 320px; max-height: 400px; overflow-y: auto; background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-modal); z-index: 50; }
+#notify-dropdown-empty { padding: var(--space-5); color: var(--text-muted); font-size: 12px; text-align: center; }
+#notify-dropdown-empty.hidden { display: none; }
+.notify-item { display: block; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--border); color: var(--text-primary); padding: var(--space-3) var(--space-4); cursor: pointer; font-size: 12px; }
+.notify-item:last-child { border-bottom: none; }
+.notify-item:hover { background: var(--bg-surface-2); }
+.notify-item.read { color: var(--text-muted); }
+.notify-item .notify-item-table { color: var(--text-secondary); font-size: 11px; margin-left: var(--space-2); }
+.notify-item .notify-item-time { color: var(--text-muted); font-size: 10px; float: right; }
+
 /* ── Records table ── */
 main { flex: 1; overflow: auto; min-height: 0; margin: var(--space-4); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
