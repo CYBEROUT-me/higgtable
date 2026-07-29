@@ -471,11 +471,19 @@ function renderNotificationDropdown() {
     const btn = document.createElement('button');
     btn.className = `notify-item${n.read ? ' read' : ''}`;
     const shortTable = n.tableName.replace(' Creatives', '');
-    btn.innerHTML = `<span class="notify-item-time">${new Date(n.timestamp).toLocaleString()}</span>${n.taskName}<span class="notify-item-table">${shortTable}</span>`;
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'notify-item-time';
+    timeSpan.textContent = new Date(n.timestamp).toLocaleString();
+    btn.appendChild(timeSpan);
+    btn.appendChild(document.createTextNode(n.taskName));
+    const tableSpan = document.createElement('span');
+    tableSpan.className = 'notify-item-table';
+    tableSpan.textContent = shortTable;
+    btn.appendChild(tableSpan);
     btn.addEventListener('click', () => {
       const rec = (recordsCache[n.tableName] || []).find(r => r.id === n.recordId);
       if (!rec) {
-        btn.innerHTML = '<em>This task is no longer available.</em>';
+        btn.textContent = 'This task is no longer available.';
         return;
       }
       toggleNotificationDropdown();
