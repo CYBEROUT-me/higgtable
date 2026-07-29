@@ -80,7 +80,13 @@ const NOTIFICATIONS_KEY = 'higgtable_notifications_v1';
 // is the first time the app has ever run (nothing persisted yet).
 function loadPersistedSeenIds() {
   const raw = localStorage.getItem(SEEN_IDS_KEY);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    log(`loadPersistedSeenIds: JSON.parse failed, discarding malformed data — ${err.message}`);
+    return null;
+  }
 }
 
 function persistSeenIds() {
@@ -93,7 +99,13 @@ function persistSeenIds() {
 
 function loadNotifications() {
   const raw = localStorage.getItem(NOTIFICATIONS_KEY);
-  return raw ? JSON.parse(raw) : [];
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    log(`loadNotifications: JSON.parse failed, discarding malformed data — ${err.message}`);
+    return [];
+  }
 }
 
 function persistNotifications() {
