@@ -18,11 +18,32 @@
         <button id="canvas-btn" class="tab" title="Lineage canvas — see how creatives branch from one another">🕸 Canvas</button>
       </nav>
       <div id="header-actions">
-        <button id="columns-btn" title="Choose which columns to show">▤ Columns</button>
+        <button id="columns-btn" title="Choose which columns to show">
+          <svg class="icon-svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="3.4" height="11" rx="1"/>
+            <rect x="6.3" y="2.5" width="3.4" height="11" rx="1"/>
+            <rect x="11.1" y="2.5" width="3.4" height="11" rx="1"/>
+          </svg>
+          <span>Columns</span>
+        </button>
         <div id="notifications-control">
-          <button id="notify-mute-btn" title="Mute notification sound">🔊</button>
+          <button id="notify-mute-btn" title="Mute notification sound">
+            <svg class="icon-svg icon-volume-on" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2.5 6.3h1.9L7.8 3.6v8.8L4.4 9.7H2.5z"/>
+              <path d="M10.4 6.4a2.7 2.7 0 0 1 0 3.2"/>
+              <path d="M12.1 4.9a5 5 0 0 1 0 6.2"/>
+            </svg>
+            <svg class="icon-svg icon-volume-off" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2.5 6.3h1.9L7.8 3.6v8.8L4.4 9.7H2.5z"/>
+              <path d="M10.6 6.6l3 3"/>
+              <path d="M13.6 6.6l-3 3"/>
+            </svg>
+          </button>
           <button id="notify-bell-btn" title="Notifications">
-            🔔
+            <svg class="icon-svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 2.25a1 1 0 0 1 1 1v.3c1.7.42 3 2.02 3 3.95v2.05c0 .8.32 1.56.9 2.13l.35.35H2.75l.35-.35c.58-.57.9-1.34.9-2.13V7.5c0-1.93 1.3-3.53 3-3.95v-.3a1 1 0 0 1 1-1z"/>
+              <path d="M6.4 13.1a1.6 1.6 0 0 0 3.2 0"/>
+            </svg>
             <span id="notify-badge" class="hidden">0</span>
           </button>
           <div id="notify-dropdown" class="hidden">
@@ -30,8 +51,20 @@
             <div id="notify-dropdown-list"></div>
           </div>
         </div>
-        <button id="refresh-btn" title="Refresh current table">⟳</button>
-        <button id="settings-btn" title="Settings">⚙</button>
+        <button id="refresh-btn" title="Refresh current table">
+          <svg class="icon-svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 8a5 5 0 0 1 8.5-3.5"/>
+            <path d="M13 8a5 5 0 0 1-8.5 3.5"/>
+            <path d="M11.5 2.5v2.3h-2.3"/>
+            <path d="M4.5 13.5v-2.3h2.3"/>
+          </svg>
+        </button>
+        <button id="settings-btn" title="Settings">
+          <svg class="icon-svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.2"/>
+            <path d="M8 1.8v2M8 12.2v2M14.2 8h-2M3.8 8h-2M12.4 3.6l-1.4 1.4M4.9 11.1l-1.4 1.4M12.4 12.4l-1.4-1.4M4.9 4.9L3.5 3.5"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div id="header-filters">

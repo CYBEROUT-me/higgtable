@@ -495,7 +495,6 @@ function toggleMute() {
   const next = !isNotificationsMuted();
   localStorage.setItem(MUTE_KEY, String(next));
   document.getElementById('notify-mute-btn').classList.toggle('muted', next);
-  document.getElementById('notify-mute-btn').textContent = next ? '🔇' : '🔊';
 }
 
 // Synthesizes a short two-tone chime via the Web Audio API — no bundled
@@ -1952,7 +1951,6 @@ function setRefreshBusy(busy) {
 
 if (isNotificationsMuted()) {
   document.getElementById('notify-mute-btn').classList.add('muted');
-  document.getElementById('notify-mute-btn').textContent = '🔇';
 }
 
 renderNotificationBell();
