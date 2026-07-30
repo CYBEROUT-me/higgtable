@@ -1,4 +1,40 @@
-const { computeHoursByDesigner } = require('../renderer/dashboard-data');
+const { computeHoursByDesigner, parseHoursValue } = require('../renderer/dashboard-data');
+
+test('parseHoursValue converts an Airtable Duration "H:MM" string to decimal hours', () => {
+  expect(parseHoursValue('01:00')).toBe(1);
+  expect(parseHoursValue('00:15')).toBe(0.25);
+  expect(parseHoursValue('00:30')).toBe(0.5);
+  expect(parseHoursValue('00:45')).toBe(0.75);
+  expect(parseHoursValue('02:00')).toBe(2);
+});
+
+test('parseHoursValue passes plain finite numbers through unchanged', () => {
+  expect(parseHoursValue(3)).toBe(3);
+  expect(parseHoursValue(0)).toBe(0);
+});
+
+test('parseHoursValue returns undefined for blank, non-numeric, or unparseable values', () => {
+  expect(parseHoursValue(undefined)).toBeUndefined();
+  expect(parseHoursValue(null)).toBeUndefined();
+  expect(parseHoursValue('')).toBeUndefined();
+  expect(parseHoursValue('not a duration')).toBeUndefined();
+  expect(parseHoursValue(NaN)).toBeUndefined();
+});
+
+test('computeHoursByDesigner correctly aggregates real Airtable Duration-string data', () => {
+  // Mirrors the real bug: Hours arrives as "H:MM" strings, plus a blank
+  // (undefined) entry for a record with nothing logged.
+  const result = computeHoursByDesigner([
+    { des: 'POL', hours: '01:00' },
+    { des: 'POL', hours: '00:30' },
+    { des: 'JUP', hours: '02:00' },
+    { des: 'JUP', hours: undefined },
+  ]);
+  expect(result.rows).toEqual([
+    { des: 'JUP', totalHours: 2, avgHours: 2 },
+    { des: 'POL', totalHours: 1.5, avgHours: 0.75 },
+  ]);
+});
 
 test('sums and averages hours per designer, sorted by total descending', () => {
   const result = computeHoursByDesigner([

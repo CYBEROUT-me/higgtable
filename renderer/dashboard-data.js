@@ -4,15 +4,36 @@
 // mirrors the canvas-data.js / notifications-data.js split so this can run
 // under plain Jest.
 
+// Normalizes a raw Hours field value into decimal hours, or `undefined` if
+// nothing usable was logged. Airtable's Duration field type surfaces as an
+// "H:MM" (or "H:MM:SS") string — e.g. '01:00' (1 hour), '00:15' (15 min) —
+// not a plain number, so that's parsed here; a plain finite number passes
+// through unchanged (defensive, in case a table's Hours is a Number field
+// instead). Anything else (blank/undefined/null/unparseable) is undefined.
+function parseHoursValue(raw) {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const match = raw.match(/^(\d+):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/);
+    if (match) {
+      const hours = Number(match[1]);
+      const minutes = Number(match[2]);
+      const seconds = match[3] ? Number(match[3]) : 0;
+      return hours + minutes / 60 + seconds / 3600;
+    }
+  }
+  return undefined;
+}
+
 // `entries` is an array of { des, hours } pairs, one per in-scope record
 // (already filtered to the desired Status/period by the caller) — `hours`
-// may be undefined/null/non-numeric when a record has no logged value.
+// is the raw Airtable field value, normalized via parseHoursValue above.
 function computeHoursByDesigner(entries) {
   const byDES = {};
   entries.forEach(({ des, hours }) => {
     if (!byDES[des]) byDES[des] = { sum: 0, count: 0 };
-    if (typeof hours === 'number' && Number.isFinite(hours)) {
-      byDES[des].sum += hours;
+    const parsed = parseHoursValue(hours);
+    if (parsed !== undefined) {
+      byDES[des].sum += parsed;
       byDES[des].count++;
     }
   });
@@ -36,5 +57,5 @@ function computeHoursByDesigner(entries) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeHoursByDesigner };
+  module.exports = { computeHoursByDesigner, parseHoursValue };
 }
