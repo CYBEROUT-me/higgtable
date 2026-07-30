@@ -61,6 +61,7 @@ const state = {
   selectedIds: new Set(), // multi-selected rows in the active table, for bulk actions
   selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
   workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
+  driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
 };
 
 let currentDetailRecord = null;
@@ -204,6 +205,7 @@ async function boot() {
   log('boot: checking for API key');
   const settings = await window.app.getSettings();
   state.workingDirectory = settings.workingDirectory || '';
+  state.driveAccountIndex = settings.driveAccountIndex || '';
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
     log('boot: no API key, showing settings modal');
@@ -1233,7 +1235,7 @@ function buildMarkdownField(rec, tableName, field, val) {
     if (link) {
       e.preventDefault();
       e.stopPropagation();
-      window.app.openExternal(link.href);
+      window.app.openExternal(rewriteDriveLink(link.href, state.driveAccountIndex));
       return;
     }
     showEditor();
@@ -1809,6 +1811,7 @@ function showSettingsModal(forced = false) {
   document.getElementById('settings-cancel-btn').style.display = forced ? 'none' : '';
   document.getElementById('api-key-input').value = '';
   document.getElementById('working-dir-input').value = state.workingDirectory || '';
+  document.getElementById('drive-account-index-input').value = state.driveAccountIndex || '';
   document.getElementById('api-key-input').focus();
 }
 
@@ -1925,6 +1928,13 @@ document.getElementById('browse-dir-btn').addEventListener('click', async () => 
   document.getElementById('working-dir-input').value = dir;
   await window.app.saveSettings({ workingDirectory: dir });
   log(`browse-dir-btn: working directory set to ${dir}`);
+});
+
+document.getElementById('drive-account-index-input').addEventListener('change', async (e) => {
+  const value = e.target.value.trim();
+  state.driveAccountIndex = value;
+  await window.app.saveSettings({ driveAccountIndex: value });
+  log(`drive-account-index-input: Drive account index set to "${value}"`);
 });
 
 document.getElementById('record-modal-close').addEventListener('click', closeRecordModal);
