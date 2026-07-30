@@ -845,6 +845,7 @@ function computeDashboardStats() {
   const notLoaded = TARGET_TABLES.filter(name => !recordsCache[name]);
   const byDES = {};
   const allTypes = new Set();
+  const hoursEntries = [];
 
   TARGET_TABLES.forEach(name => {
     (recordsCache[name] || []).forEach(r => {
@@ -862,6 +863,7 @@ function computeDashboardStats() {
       if (!byDES[des]) byDES[des] = { total: 0, types: {} };
       byDES[des].total++;
       byDES[des].types[type] = (byDES[des].types[type] || 0) + 1;
+      hoursEntries.push({ des, hours: r.fields['Hours'] });
     });
   });
 
@@ -869,11 +871,13 @@ function computeDashboardStats() {
     .map(([des, data]) => ({ des, total: data.total, types: data.types }))
     .sort((a, b) => b.total - a.total);
 
-  return { rows, allTypes: [...allTypes].sort(), notLoaded, from, to };
+  const { rows: hoursRows, totalHours, avgHours } = computeHoursByDesigner(hoursEntries);
+
+  return { rows, allTypes: [...allTypes].sort(), notLoaded, from, to, hoursRows, totalHours, avgHours };
 }
 
 function renderDashboard() {
-  const { rows, allTypes, notLoaded, from, to } = computeDashboardStats();
+  const { rows, allTypes, notLoaded, from, to, hoursRows, totalHours, avgHours } = computeDashboardStats();
   const rangeLabel = document.getElementById('dashboard-range-label');
   rangeLabel.textContent = (from || to) ? `${from || '…'} → ${to || '…'}` : 'All time';
 
@@ -946,6 +950,48 @@ function renderDashboard() {
   });
 
   area.appendChild(table);
+
+  const hoursTable = document.createElement('table');
+  hoursTable.className = 'dash-table';
+
+  const hoursCaption = document.createElement('caption');
+  hoursCaption.textContent = 'Time spent per designer (same filter as above)';
+  hoursTable.appendChild(hoursCaption);
+
+  const hoursHr = hoursTable.createTHead().insertRow();
+  ['#', 'Designer', 'Total Hours', 'Avg Hours / Creative'].forEach(label => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    hoursHr.appendChild(th);
+  });
+
+  const hoursTbody = hoursTable.createTBody();
+  const maxHours = hoursRows.length ? hoursRows[0].totalHours : 0;
+  hoursRows.forEach((row, i) => {
+    const tr = hoursTbody.insertRow();
+    const tdRank = tr.insertCell(); tdRank.textContent = i + 1; tdRank.className = 'dash-rank';
+    const tdName = tr.insertCell(); tdName.textContent = row.des; tdName.className = 'dash-name';
+
+    const tdBar = tr.insertCell(); tdBar.className = 'dash-bar-cell';
+    const track = document.createElement('div'); track.className = 'dash-bar-track';
+    const fill = document.createElement('div'); fill.className = 'dash-bar-fill';
+    fill.style.width = `${maxHours ? Math.max(4, (row.totalHours / maxHours) * 100) : 4}%`;
+    const label = document.createElement('span'); label.className = 'dash-bar-label'; label.textContent = row.totalHours.toFixed(1);
+    track.appendChild(fill); track.appendChild(label);
+    tdBar.appendChild(track);
+
+    const tdAvg = tr.insertCell();
+    tdAvg.textContent = row.avgHours === null ? '–' : row.avgHours.toFixed(1);
+  });
+
+  const hoursTotalRow = hoursTbody.insertRow();
+  hoursTotalRow.className = 'total-row';
+  hoursTotalRow.insertCell().textContent = '';
+  hoursTotalRow.insertCell().textContent = 'Total';
+  hoursTotalRow.insertCell().textContent = totalHours.toFixed(1);
+  hoursTotalRow.insertCell().textContent = avgHours === null ? '–' : avgHours.toFixed(1);
+
+  area.appendChild(hoursTable);
 }
 
 // ── Record detail modal ─────────────────────────────────────────────────
