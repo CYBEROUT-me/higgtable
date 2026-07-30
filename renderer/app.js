@@ -1610,8 +1610,14 @@ async function openAutofillModal() {
 
       let timing = null;
       if (videoPath && timingChoices.length) {
-        const seconds = await window.app.getVideoDuration(videoPath).catch(() => null);
+        const seconds = await window.app.getVideoDuration(videoPath).catch(err => {
+          log(`openAutofillModal: duration read FAILED for ${videoFilename} — ${err.message}`);
+          return null;
+        });
         const choice = seconds != null ? mapDurationToTimingChoice(seconds, timingChoices) : null;
+        if (seconds != null && !choice) {
+          log(`openAutofillModal: no Timing choice matched ${seconds.toFixed(2)}s for ${videoFilename} (choices: ${timingChoices.join(', ')})`);
+        }
         if (choice) timing = { filename: videoFilename, path: videoPath, seconds, choice, include: true };
       }
 
