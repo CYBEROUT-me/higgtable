@@ -1821,7 +1821,7 @@ function hideSettingsModal() {
 
 async function saveSettings() {
   const key = document.getElementById('api-key-input').value.trim();
-  if (!key) { alert('Please enter an API key.'); return; }
+  if (!key) { hideSettingsModal(); return; }
   const btn = document.getElementById('settings-save-btn');
   btn.disabled = true;
   try {
