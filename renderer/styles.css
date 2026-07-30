@@ -161,7 +161,7 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .modal-box { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-modal); padding: var(--space-6) var(--space-7); min-width: 380px; }
 .modal-box h2 { font-size: 14px; margin-bottom: var(--space-3); color: var(--text-primary); }
 .modal-box p { font-size: 12px; color: var(--text-secondary); margin-bottom: var(--space-3); }
-.modal-box input[type=password] { width: 100%; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-3); border-radius: var(--radius-sm); font-size: 12px; font-family: monospace; margin-bottom: var(--space-5); }
+.modal-box input[type=password], .modal-box input[type=number] { width: 100%; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-3); border-radius: var(--radius-sm); font-size: 12px; font-family: monospace; margin-bottom: var(--space-5); }
 .modal-box input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .modal-actions { display: flex; gap: var(--space-3); justify-content: flex-end; }
 .hint { color: var(--text-muted) !important; font-size: 11px !important; margin-top: var(--space-4) !important; }
