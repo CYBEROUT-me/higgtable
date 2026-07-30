@@ -30,4 +30,5 @@ contextBridge.exposeInMainWorld('app', {
   renameFile:        (from, to)    => ipcRenderer.invoke('rename-file', from, to),
   log:               (msg)         => ipcRenderer.invoke('log', msg),
   getLogPath:        ()            => ipcRenderer.invoke('get-log-path'),
+  openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
 });

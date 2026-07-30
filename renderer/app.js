@@ -1197,17 +1197,6 @@ function buildFieldInput(rec, tableName, field, val) {
   return inp;
 }
 
-// Minimal markdown-lite renderer for long text fields (Description, etc.) —
-// just **bold** and line breaks, matching how these fields are actually
-// written in Airtable, without pulling in a full markdown library.
-function renderMarkdownLite(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>');
-}
-
 // Shows rendered markdown by default; clicking swaps to a plain textarea
 // for editing, and blurring re-renders. Tall by default since these are
 // often multi-paragraph creative briefs.
@@ -1239,7 +1228,16 @@ function buildMarkdownField(rec, tableName, field, val) {
     preview.classList.remove('hidden');
   };
 
-  preview.onclick = showEditor;
+  preview.onclick = (e) => {
+    const link = e.target.closest('a.record-markdown-link');
+    if (link) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.app.openExternal(link.href);
+      return;
+    }
+    showEditor();
+  };
   ta.onblur = () => {
     updateRecordField(rec, tableName, field, ta.value || null, ta);
     showPreview();

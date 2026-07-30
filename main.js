@@ -319,6 +319,9 @@ ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
 
 ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
 ipcMain.handle('get-log-path', () => logFilePath);
+ipcMain.handle('open-external', (_e, url) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
 
 ipcMain.handle('get-settings', () => loadSettingsFile());
 ipcMain.handle('save-settings', (_e, data) => {
