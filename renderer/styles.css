@@ -232,6 +232,10 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .record-markdown-preview strong { color: var(--accent); font-weight: 600; }
 .record-markdown-empty { color: var(--text-muted); font-style: italic; }
 .record-markdown-preview a.record-markdown-link { color: var(--accent); text-decoration: underline; cursor: pointer; }
+.record-text-field-with-link { display: flex; align-items: center; gap: var(--space-2); }
+.record-text-field-with-link input { flex: 1; }
+.field-open-link-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: none; border: none; border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; flex-shrink: 0; transition: background-color 0.15s, color 0.15s; }
+.field-open-link-btn:hover { background: var(--bg-surface-2); color: var(--text-primary); }
 .record-field-value input[type=checkbox] { width: auto; }
 .record-multiselect { display: flex; flex-direction: column; gap: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); padding: 2px; }
 .record-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }

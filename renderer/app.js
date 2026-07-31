@@ -1196,7 +1196,25 @@ function buildFieldInput(rec, tableName, field, val) {
   inp.type = 'text';
   inp.value = val == null ? '' : String(val);
   inp.onblur = () => updateRecordField(rec, tableName, field, inp.value || null, inp);
-  return inp;
+
+  if (typeof val !== 'string' || !/^https?:\/\//i.test(val)) return inp;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'record-text-field-with-link';
+  wrap.appendChild(inp);
+
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button';
+  openBtn.className = 'field-open-link-btn';
+  openBtn.title = 'Open link';
+  openBtn.innerHTML = `<svg class="icon-svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6.5 2.5h-3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/>
+    <path d="M9.5 2.5h4v4"/>
+    <path d="M13 3l-6 6"/>
+  </svg>`;
+  openBtn.onclick = () => window.app.openExternal(rewriteDriveLink(inp.value, state.driveAccountIndex));
+  wrap.appendChild(openBtn);
+  return wrap;
 }
 
 // Shows rendered markdown by default; clicking swaps to a plain textarea
