@@ -2,6 +2,7 @@
 const {
   MAX_NOTIFICATIONS,
   recordToNotification,
+  computeDeadlineUrgency,
   diffMissedRecords,
   appendNotification,
   appendNotificationBatch,
@@ -22,7 +23,19 @@ test('recordToNotification maps a record into a notification entry', () => {
     taskName: 'Cut the trailer',
     timestamp: 1000,
     read: false,
+    priority: null,
+    deadline: null,
   });
+});
+
+test('recordToNotification captures priority and deadline when present', () => {
+  const entry = recordToNotification(
+    rec('rec1', { Name: 'Cut the trailer', Priority: 'High', Deadline: '2026-08-01' }),
+    'VCP Creatives',
+    1000
+  );
+  expect(entry.priority).toBe('High');
+  expect(entry.deadline).toBe('2026-08-01');
 });
 
 test('recordToNotification falls back to "Untitled task" when Name is blank', () => {
@@ -78,4 +91,25 @@ test('markAllRead sets read on every entry without mutating the input', () => {
   const result = markAllRead(list);
   expect(result.every(n => n.read)).toBe(true);
   expect(list[0].read).toBe(false); // original untouched
+});
+
+test('computeDeadlineUrgency returns "overdue" for a past date', () => {
+  expect(computeDeadlineUrgency('2026-07-30', '2026-07-31')).toBe('overdue');
+});
+
+test('computeDeadlineUrgency returns "today" for the exact same date', () => {
+  expect(computeDeadlineUrgency('2026-07-31', '2026-07-31')).toBe('today');
+});
+
+test('computeDeadlineUrgency returns "tomorrow" for the next day, across a year rollover', () => {
+  expect(computeDeadlineUrgency('2027-01-01', '2026-12-31')).toBe('tomorrow');
+});
+
+test('computeDeadlineUrgency returns "normal" for a date further out', () => {
+  expect(computeDeadlineUrgency('2026-08-15', '2026-07-31')).toBe('normal');
+});
+
+test('computeDeadlineUrgency returns null when there is no deadline', () => {
+  expect(computeDeadlineUrgency(null, '2026-07-31')).toBeNull();
+  expect(computeDeadlineUrgency('', '2026-07-31')).toBeNull();
 });

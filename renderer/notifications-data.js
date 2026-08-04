@@ -18,7 +18,30 @@ function recordToNotification(rec, tableName, now) {
     taskName: rec.fields['Name'] || 'Untitled task',
     timestamp: now,
     read: false,
+    priority: rec.fields['Priority'] || null,
+    deadline: rec.fields['Deadline'] || null,
   };
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// Adds `days` to a plain YYYY-MM-DD string, using local date components
+// throughout (never UTC/.toISOString()) so it can't shift by a day in
+// timezones ahead of UTC — matches how app.js's own toISO() works.
+function addDaysISO(dateStr, days) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+// Classifies a deadline relative to `today` (both plain YYYY-MM-DD strings,
+// `today` passed in rather than read from the clock, for determinism).
+function computeDeadlineUrgency(deadline, today) {
+  if (!deadline) return null;
+  if (deadline < today) return 'overdue';
+  if (deadline === today) return 'today';
+  if (deadline === addDaysISO(today, 1)) return 'tomorrow';
+  return 'normal';
 }
 
 // Given the record IDs persisted from the last session and the current
@@ -55,6 +78,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAX_NOTIFICATIONS,
     recordToNotification,
+    computeDeadlineUrgency,
     diffMissedRecords,
     appendNotification,
     appendNotificationBatch,
