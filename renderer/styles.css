@@ -65,6 +65,10 @@ nav#tabs { display: flex; gap: var(--space-1); flex-wrap: wrap; }
 .notify-item.read { color: var(--text-muted); }
 .notify-item .notify-item-table { color: var(--text-secondary); font-size: 11px; margin-left: var(--space-2); }
 .notify-item .notify-item-time { display: block; color: var(--text-muted); font-size: 10px; margin-bottom: var(--space-1); }
+.notify-item.urgent { border-left: 3px solid #f66; }
+.notify-deadline { font-size: 10px; margin-left: var(--space-2); color: var(--text-muted); }
+.notify-deadline.overdue { color: #f66; font-weight: 600; }
+.notify-deadline.today, .notify-deadline.tomorrow { color: #fa0; font-weight: 600; }
 
 /* ── Records table ── */
 main { flex: 1; overflow: auto; min-height: 0; margin: var(--space-4); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }

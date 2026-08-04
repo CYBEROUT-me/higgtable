@@ -533,15 +533,33 @@ function renderNotificationDropdown() {
   const emptyEl = document.getElementById('notify-dropdown-empty');
   emptyEl.classList.toggle('hidden', notifications.length > 0);
   listEl.innerHTML = '';
+  const today = toISO(new Date());
+  const DEADLINE_LABELS = { overdue: 'Overdue', today: 'Due today', tomorrow: 'Due tomorrow' };
   notifications.forEach(n => {
+    const urgency = computeDeadlineUrgency(n.deadline, today);
+    const isUrgentRow = n.priority === 'High' || urgency === 'overdue';
     const btn = document.createElement('button');
-    btn.className = `notify-item${n.read ? ' read' : ''}`;
+    btn.className = `notify-item${n.read ? ' read' : ''}${isUrgentRow ? ' urgent' : ''}`;
     const shortTable = n.tableName.replace(' Creatives', '');
     const timeSpan = document.createElement('span');
     timeSpan.className = 'notify-item-time';
     timeSpan.textContent = new Date(n.timestamp).toLocaleString();
     btn.appendChild(timeSpan);
     btn.appendChild(document.createTextNode(n.taskName));
+    if (n.priority) {
+      const priorityPill = document.createElement('span');
+      priorityPill.className = 'select-pill';
+      priorityPill.textContent = n.priority;
+      const swatch = singleSelectSwatch(n.tableName, 'Priority', n.priority);
+      if (swatch) { priorityPill.style.background = swatch.bg; priorityPill.style.color = swatch.text; }
+      btn.appendChild(priorityPill);
+    }
+    if (n.deadline) {
+      const deadlineSpan = document.createElement('span');
+      deadlineSpan.className = `notify-deadline${urgency !== 'normal' ? ` ${urgency}` : ''}`;
+      deadlineSpan.textContent = DEADLINE_LABELS[urgency] || n.deadline;
+      btn.appendChild(deadlineSpan);
+    }
     const tableSpan = document.createElement('span');
     tableSpan.className = 'notify-item-table';
     tableSpan.textContent = shortTable;
