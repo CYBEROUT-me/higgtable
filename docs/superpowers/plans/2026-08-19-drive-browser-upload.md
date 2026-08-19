@@ -19,6 +19,17 @@
 - **No invented selectors.** Any DOM assumption must come from the Task 3 diagnostic output, and lives only in `drive-probes.js`.
 - Tasks 3–5 cannot be verified by the implementing agent — they need the user's authenticated session. Those tasks end with the *user* running a command and reporting back.
 
+## Safety guards (non-negotiable)
+
+These exist to prevent the automation from making a mess in real client folders or in the designer's working directory. Every one of them fails **closed**.
+
+1. **The upload source must be the task folder, verified by name.** Before reading any file, assert `basename(dir) === taskName`. Without this, a click before renaming would point at the raw working directory (e.g. the After Effects folder) and upload hundreds of unrelated files into a client's Drive.
+2. **Never create a folder that may already exist.** Folder lookup returns *all* name matches: 0 → create, 1 → use, **more than 1 → abort**. A wrong probe otherwise silently creates a duplicate `08_August` on every attempt, compounding with each retry.
+3. **Size ceilings, checked before reading bytes.** Per-file 100 MB, per-delivery 500 MB. File bytes cross into the page as base64 (~1.33× size), so an unguarded multi-GB source file would exhaust memory and hang the app instead of failing cleanly.
+4. **Read-only locally.** This feature never creates, moves, renames, or deletes anything on disk — only reads. All local file mutation stays in the existing `performRename()`.
+5. **Never dry-run inside a client folder.** Test runs target a scratch folder the user owns in their own My Drive, passed explicitly — never a configured `<App>_creatives` folder.
+6. **Isolated browser session.** The Drive window uses its own `persist:gdrive` partition, so it cannot disturb the user's real Chrome profile, cookies, or logged-in sessions.
+
 ## File structure
 
 | File | Responsibility |
@@ -677,7 +688,7 @@ git commit -m "Add Drive browser session and DOM discovery diagnostic"
 - Produces:
   - `drive-probes.js` exporting `PROBES` — an object where each key is one named DOM assumption with `{ describe, test(win), ... }`.
   - `preflight()` → `{ ok: boolean, failures: string[] }`.
-  - `findChildFolderByName(parentId, name)` → `folderId|null`.
+  - `findChildFoldersByName(parentId, name)` → `string[]` — **all** matching child folder IDs, so callers can abort on duplicates rather than blindly creating another.
   - `createFolder(parentId, name)` → `folderId`.
   - `uploadFiles(folderId, filePaths)` → `{ uploaded: string[] }`.
   - `listFolderFileNames(folderId)` → `string[]`.
@@ -764,13 +775,15 @@ Probes only present after an interaction (the folder-name dialog, the New menu i
 
 - [ ] **Step 3: Implement the folder operations in `drive-browser.js`**
 
-`findChildFolderByName` uses the search URL form the user already uses manually, so it depends on URL structure rather than UI chrome:
+`findChildFoldersByName` uses the search URL form the user already uses manually, so it depends on URL structure rather than UI chrome. It returns **every** match — matching on exact name only, never a prefix, so `08_August` can't match `08_August_old`:
 
 ```javascript
-// Finds a direct child folder by exact name using Drive's own search URL —
-// the same ?q=parent:<id> title:<name> form used manually. Returns its id,
-// or null if absent.
-async function findChildFolderByName(parentId, name) {
+// Finds direct child folders by EXACT name using Drive's own search URL —
+// the same ?q=parent:<id> title:<name> form used manually. Returns every
+// matching id so the caller can abort on duplicates instead of creating yet
+// another one. Exact match only: a prefix match would conflate similarly
+// named folders and deliver into the wrong one.
+async function findChildFoldersByName(parentId, name) {
   const win = getDriveWindow({ show: false });
   const q = encodeURIComponent(`parent:${parentId} title:${name}`);
   win.loadURL(`https://drive.google.com/drive/search?q=${q}`);
@@ -778,20 +791,39 @@ async function findChildFolderByName(parentId, name) {
   const { selector, idAttribute } = PROBES.folderRow;
   return win.webContents.executeJavaScript(
     `(() => {
+      const out = [];
       const rows = document.querySelectorAll(${JSON.stringify(selector)});
       for (const r of rows) {
         const label = (r.getAttribute('aria-label') || r.innerText || '').trim();
-        if (label === ${JSON.stringify(name)} || label.startsWith(${JSON.stringify(name)})) {
-          return r.getAttribute(${JSON.stringify(idAttribute)});
+        if (label === ${JSON.stringify(name)}) {
+          const id = r.getAttribute(${JSON.stringify(idAttribute)});
+          if (id && out.indexOf(id) === -1) out.push(id);
         }
       }
-      return null;
+      return out;
     })()`
   );
 }
+
+// Find-or-create with the duplicate guard. This is the only sanctioned way to
+// obtain a month or task folder id.
+async function findOrCreateFolder(parentId, name) {
+  const existing = await findChildFoldersByName(parentId, name);
+  if (existing.length === 1) return existing[0];
+  if (existing.length > 1) {
+    throw new Error(`Drive already has ${existing.length} folders named "${name}" in this parent. Resolve that by hand — refusing to add another.`);
+  }
+  const created = await createFolder(parentId, name);
+  // Read the id back from a fresh search rather than trusting the dialog DOM.
+  const after = await findChildFoldersByName(parentId, name);
+  if (after.length !== 1) {
+    throw new Error(`Created "${name}" but read back ${after.length} matches — aborting before upload to avoid duplicating files.`);
+  }
+  return created || after[0];
+}
 ```
 
-`createFolder` drives the New → New folder → type name flow, then re-finds the folder by name to obtain its ID from a fresh page rather than trusting the dialog's DOM. Implement it using `PROBES.newButton`, `PROBES.newFolderMenuItem`, `PROBES.folderNameField`, clicking via `element.click()` in the page context (not coordinates), then `findChildFolderByName(parentId, name)` to read back the ID. Throw if the read-back returns null.
+`createFolder(parentId, name)` drives the New → New folder → type name flow using `PROBES.newButton`, `PROBES.newFolderMenuItem`, and `PROBES.folderNameField`, clicking via `element.click()` in the page context (never coordinates). It returns the new folder's id if it can read one, or `null` — `findOrCreateFolder` above is responsible for confirming the result, so `createFolder` is never called directly elsewhere.
 
 `uploadFiles` reads bytes in the main process and injects them, primary strategy first:
 
@@ -799,7 +831,33 @@ async function findChildFolderByName(parentId, name) {
 const fs = require('fs');
 const path = require('path');
 
+// File bytes reach the page as base64 (~1.33x size) because executeJavaScript
+// serializes arguments as JSON and cannot carry binary. Unguarded, a multi-GB
+// After Effects source would exhaust memory and hang the app rather than fail
+// cleanly — so sizes are checked BEFORE anything is read.
+const MAX_FILE_BYTES = 100 * 1024 * 1024;   // 100 MB per file
+const MAX_TOTAL_BYTES = 500 * 1024 * 1024;  // 500 MB per delivery
+
+function assertUploadSizes(filePaths) {
+  let total = 0;
+  const tooBig = [];
+  for (const p of filePaths) {
+    const { size } = fs.statSync(p);
+    total += size;
+    if (size > MAX_FILE_BYTES) {
+      tooBig.push(`${path.basename(p)} (${(size / 1048576).toFixed(0)} MB)`);
+    }
+  }
+  if (tooBig.length) {
+    throw new Error(`Refusing to upload — over the ${MAX_FILE_BYTES / 1048576} MB per-file limit: ${tooBig.join(', ')}. Remove these from the task folder (or exclude source files) and retry.`);
+  }
+  if (total > MAX_TOTAL_BYTES) {
+    throw new Error(`Refusing to upload — ${(total / 1048576).toFixed(0)} MB total exceeds the ${MAX_TOTAL_BYTES / 1048576} MB limit for one delivery.`);
+  }
+}
+
 async function uploadFiles(folderId, filePaths) {
+  assertUploadSizes(filePaths);
   await navigateToFolder(folderId);
   const win = getDriveWindow({ show: false });
   const payload = filePaths.map(p => ({
@@ -858,18 +916,15 @@ async function deliver({ appFolderId, monthName, taskName, filePaths }) {
   }
 
   const warnings = [];
-  let monthId = await findChildFolderByName(appFolderId, monthName);
-  if (!monthId) monthId = await createFolder(appFolderId, monthName);
+  // findOrCreateFolder aborts on duplicate names rather than adding another,
+  // so a broken probe cannot litter the client's Drive on repeated attempts.
+  const monthId = await findOrCreateFolder(appFolderId, monthName);
+  const taskId = await findOrCreateFolder(monthId, taskName);
 
-  let taskId = await findChildFolderByName(monthId, taskName);
-  if (!taskId) {
-    taskId = await createFolder(monthId, taskName);
-  } else {
-    const existing = await listFolderFileNames(taskId);
-    const clashes = filePaths.map(p => path.basename(p)).filter(n => existing.includes(n));
-    if (clashes.length) {
-      warnings.push(`Drive already has these files and will create duplicates rather than replace them: ${clashes.join(', ')}`);
-    }
+  const existing = await listFolderFileNames(taskId);
+  const clashes = filePaths.map(p => path.basename(p)).filter(n => existing.includes(n));
+  if (clashes.length) {
+    warnings.push(`Drive already has these files and will create duplicates rather than replace them: ${clashes.join(', ')}`);
   }
 
   await uploadFiles(taskId, filePaths);
@@ -912,18 +967,24 @@ Expected: no syntax errors; tests PASS 76/76.
 
 - [ ] **Step 7: USER RUNS AN END-TO-END DRY RUN — no Airtable write yet**
 
-Full quit and relaunch (`npm start`). Ask the user to create a **throwaway** task folder locally with one or two small files, then in DevTools:
+Full quit and relaunch (`npm start`).
+
+**This must not run inside a client folder.** Ask the user first to create a scratch folder in their **own My Drive** (e.g. `HiggTable Upload Test`), open it, and copy its URL — the dry run targets that, never a configured `<App>_creatives` folder. A first run with unproven probes is exactly when stray folders get created, and that mess should land somewhere private and disposable.
+
+Then, with one or two **small** local test files, in DevTools:
 
 ```js
 await window.app.driveUpload({
-  appFolderId: state.driveAppFolders.CMC,
+  appFolderId: parseFolderIdFromUrl('<PASTE SCRATCH FOLDER URL>'),
   monthName: monthFolderName(toISO(new Date())),
   taskName: 'HIGGTABLE_TEST_DELETE_ME',
   filePaths: ['/absolute/path/to/a/small/test.png'],
 })
 ```
 
-Expected in the returned object: a `folderUrl` containing `/folders/`, `missing: []`, and the file actually visible in Drive under `<App>_creatives/<MM_Month>/HIGGTABLE_TEST_DELETE_ME/`. Any `error` string, non-empty `missing`, or failing probe list means iterate on `drive-probes.js` before continuing. Have them delete the test folder afterwards.
+Expected in the returned object: a `folderUrl` containing `/folders/`, `missing: []`, and the file actually visible in Drive under `<scratch>/<MM_Month>/HIGGTABLE_TEST_DELETE_ME/`. Any `error` string, non-empty `missing`, or failing probe list means iterate on `drive-probes.js` before continuing.
+
+Have them delete the scratch folder when the dry run passes — and check it for stray folders created by failed attempts before deleting.
 
 **Stop and wait for this result.** Task 5 connects the Airtable write and must not be enabled until this succeeds once.
 
@@ -988,8 +1049,23 @@ async function uploadTaskToDrive() {
     alert('Rename the files first — the task folder was not found.');
     return;
   }
-  const filePaths = await window.app.findAssetFilesInFolder(dirs[0]);
-  if (!filePaths.length) { alert(`No files found in ${dirs[0]}`); return; }
+  const sourceDir = dirs[0];
+
+  // SAFETY: only ever upload from the per-task folder performRename() created.
+  // Before renaming, these paths point at the raw working directory (e.g. the
+  // After Effects folder) — uploading that would dump hundreds of unrelated
+  // files into a client's Drive. The folder name must equal the task Name.
+  if (sourceDir.split('/').pop() !== taskName) {
+    alert(`Not uploading: "${sourceDir}" is not this task's folder.\n\nClick "Rename Files" first — that gathers the files into a folder named after the task. Nothing was uploaded.`);
+    return;
+  }
+
+  const filePaths = await window.app.findAssetFilesInFolder(sourceDir);
+  if (!filePaths.length) { alert(`No files found in ${sourceDir}`); return; }
+
+  if (!confirm(`Upload ${filePaths.length} file(s) to Drive?\n\n${DRIVE_APP_LABELS[code] || code} / ${monthFolderName(toISO(new Date()))} / ${taskName}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}`)) {
+    return;
+  }
 
   const btn = document.getElementById('drive-upload-btn');
   btn.disabled = true;
