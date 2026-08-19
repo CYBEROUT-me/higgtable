@@ -103,12 +103,13 @@ async function loadAndWait(win, url) {
   }
 }
 
-async function navigateToFolder(folderId) {
+async function navigateToFolder(folderId, { force = false } = {}) {
   const win = getDriveWindow({ show: false });
   const current = win.webContents.getURL();
-  // Already there and idle: skip the reload entirely. Saves several seconds
-  // per lookup and avoids re-rendering a listing we can already read.
-  if (current.includes(`/folders/${folderId}`) && !win.webContents.isLoading()) {
+  // Already there and idle: skip the reload. Callers that need FRESH content
+  // (e.g. reading back a folder just created) must pass { force: true }, or
+  // they'd re-read the stale listing rendered before the change.
+  if (!force && current.includes(`/folders/${folderId}`) && !win.webContents.isLoading()) {
     return { url: current, folderId };
   }
   await loadAndWait(win, `https://drive.google.com/drive/folders/${folderId}`);
@@ -499,9 +500,9 @@ const LIST_ITEMS_SCRIPT = `(() => {
   }).filter(i => i.id && i.name);
 })()`;
 
-async function listFolderItems(folderId) {
-  logFn(`listFolderItems: ${folderId}`);
-  await navigateToFolder(folderId);
+async function listFolderItems(folderId, opts = {}) {
+  logFn(`listFolderItems: ${folderId}${opts.force ? ' (forced reload)' : ''}`);
+  await navigateToFolder(folderId, opts);
   const win = getDriveWindow({ show: false });
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
   await sleep(1500);
@@ -516,8 +517,8 @@ async function listFolderFileNames(folderId) {
 // Finds direct child folders by EXACT name. Returns EVERY match so the caller
 // can abort on duplicates instead of creating yet another one. Exact match
 // only: a prefix match would conflate "08_August" with "08_August_old".
-async function findChildFoldersByName(parentId, name) {
-  const items = await listFolderItems(parentId);
+async function findChildFoldersByName(parentId, name, opts = {}) {
+  const items = await listFolderItems(parentId, opts);
   return items.filter(i => i.isFolder && i.name === name).map(i => i.id);
 }
 
@@ -580,15 +581,28 @@ async function createFolder(parentId, name) {
 // Find-or-create with the duplicate guard. The ONLY sanctioned way to obtain a
 // month or task folder id.
 async function findOrCreateFolder(parentId, name) {
-  const existing = await findChildFoldersByName(parentId, name);
+  const existing = await findChildFoldersByName(parentId, name, { force: true });
   if (existing.length === 1) return existing[0];
   if (existing.length > 1) {
     throw new Error(`Drive already has ${existing.length} folders named "${name}" in this parent. Resolve that by hand — refusing to add another.`);
   }
+
   await createFolder(parentId, name);
-  const after = await findChildFoldersByName(parentId, name);
+
+  // Drive's listing can lag behind creation, so force a real reload and retry
+  // briefly rather than trusting a single immediate read.
+  let after = [];
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await sleep(2500);
+    after = await findChildFoldersByName(parentId, name, { force: true });
+    if (after.length) break;
+  }
+
   if (after.length !== 1) {
-    throw new Error(`Created "${name}" but read back ${after.length} matches — aborting before upload to avoid duplicating files.`);
+    const all = await listFolderItems(parentId, { force: true });
+    const folderNames = all.filter(i => i.isFolder).map(i => i.name);
+    throw new Error(`Created "${name}" but read back ${after.length} matches. Folders now in parent: ${JSON.stringify(folderNames)} — aborting before upload to avoid duplicating files.`);
   }
   return after[0];
 }
