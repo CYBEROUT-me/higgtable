@@ -29,9 +29,13 @@ const PROBES = {
     // Name is the first line of innerText — more robust than aria-label, which
     // appends a type word and, for files, "More info (Option + ...)".
     nameFromInnerTextFirstLine: true,
-    // Folders end with " Folder"; ENDS-with matters, since a file named
-    // "My Folder.png" yields "My Folder.png Image" which merely contains it.
-    folderAriaLabelSuffix: ' Folder',
+    // Drive labels items "<name> <TypeWord> [More info (Option + ...)]".
+    // Folder detection strips the name and checks the type word — verified
+    // 2026-08-19 against "08_August Folder More info (Option + ...)" and
+    // "Test folder Folder" (folders) vs "a.jpg Image ..." (files).
+    // An endsWith(' Folder') test breaks when "More info" is appended, and a
+    // contains(' Folder') test wrongly matches a file named "My Folder.png".
+    folderTypeWord: 'Folder',
   },
 
   // Two buttons read "New"; one is 0x0. Must filter to visible.

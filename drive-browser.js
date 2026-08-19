@@ -520,13 +520,19 @@ async function preflight() {
 
 // Lists the children of the currently-open folder view.
 const LIST_ITEMS_SCRIPT = `(() => {
-  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   return [...document.querySelectorAll(${JSON.stringify(PROBES.itemRow.selector)})].map(el => {
-    const aria = el.getAttribute('aria-label') || '';
+    const aria = (el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+    const name = (el.innerText || '').split('\\n')[0].trim();
+    // Drive labels items "<name> <TypeWord> [More info ...]". Strip the name and
+    // read the type word. An endsWith(' Folder') test fails whenever "More info"
+    // is appended, and a contains(' Folder') test would wrongly match a file
+    // called "My Folder.png" — this handles both.
+    const rest = aria.startsWith(name) ? aria.slice(name.length).trim() : aria;
     return {
       id: el.getAttribute(${JSON.stringify(PROBES.itemRow.idAttribute)}),
-      name: (el.innerText || '').split('\\n')[0].trim(),
-      isFolder: aria.endsWith(${JSON.stringify(PROBES.itemRow.folderAriaLabelSuffix)}),
+      name,
+      isFolder: rest.startsWith('Folder'),
+      aria,
     };
   }).filter(i => i.id && i.name);
 })()`;
