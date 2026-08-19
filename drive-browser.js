@@ -87,18 +87,88 @@ async function navigateToFolder(folderId) {
   return { url, folderId: m ? m[1] : null };
 }
 
+// Runs `fn` with the CDP debugger attached, always detaching afterwards so a
+// failure can't leave it attached and block later runs.
+async function withDebugger(win, fn) {
+  const dbg = win.webContents.debugger;
+  if (!dbg.isAttached()) dbg.attach('1.3');
+  try {
+    return await fn(dbg);
+  } finally {
+    if (dbg.isAttached()) dbg.detach();
+  }
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Clicks the first [role=button]/button whose trimmed text equals `label`.
+// Uses element.click() in page context rather than coordinates, so it works
+// regardless of layout.
+function clickByTextScript(label) {
+  return '(() => {' +
+    'const els = [...document.querySelectorAll("[role=button],button,[role=menuitem]")];' +
+    'const hit = els.find(e => (e.innerText || "").trim() === ' + JSON.stringify(label) + ') ||' +
+    '            els.find(e => (e.innerText || "").trim().startsWith(' + JSON.stringify(label) + '));' +
+    'if (!hit) return null;' +
+    'hit.click();' +
+    'return { tag: hit.tagName, text: (hit.innerText || "").trim().slice(0, 40) };' +
+  '})()';
+}
+
+// Dumps whatever menu/dialog is currently open, so we can learn its item names.
+const DUMP_MENU_SCRIPT = '(() => {' +
+  'const items = [...document.querySelectorAll("[role=menuitem],[role=menu] [role=button]")];' +
+  'return items.slice(0, 20).map(e => ({ text: (e.innerText || "").trim().slice(0, 40), role: e.getAttribute("role") }));' +
+'})()';
+
+// Samples the several ways Drive might expose a child item's identity. The
+// first diagnostic only looked at [data-id] and found nothing usable, so this
+// casts a wider net — run it against a folder WITH contents.
+const ROW_SAMPLE_SCRIPT = '(() => {' +
+  'const desc = (el) => ({' +
+  '  tag: el.tagName, role: el.getAttribute("role"),' +
+  '  ariaLabel: (el.getAttribute("aria-label") || "").slice(0, 60),' +
+  '  dataId: el.getAttribute("data-id"), dataTarget: el.getAttribute("data-target"),' +
+  '  href: el.getAttribute("href"),' +
+  '  text: (el.innerText || "").trim().slice(0, 50)' +
+  '});' +
+  'const take = (sel, n) => [...document.querySelectorAll(sel)].slice(0, n).map(desc);' +
+  'return {' +
+  '  counts: {' +
+  '    roleRow: document.querySelectorAll("[role=row]").length,' +
+  '    gridcell: document.querySelectorAll("[role=gridcell]").length,' +
+  '    listitem: document.querySelectorAll("[role=listitem]").length,' +
+  '    folderLinks: document.querySelectorAll(\'a[href*="/folders/"]\').length,' +
+  '    fileLinks: document.querySelectorAll(\'a[href*="/file/d/"]\').length,' +
+  '    dataTarget: document.querySelectorAll("[data-target]").length,' +
+  '    dataId: document.querySelectorAll("[data-id]").length' +
+  '  },' +
+  '  roleRow: take("[role=row]", 5),' +
+  '  listitem: take("[role=listitem]", 5),' +
+  '  folderLinks: take(\'a[href*="/folders/"]\', 5),' +
+  '  fileLinks: take(\'a[href*="/file/d/"]\', 5),' +
+  '  dataTarget: take("[data-target]", 5)' +
+  '};' +
+'})()';
+
 // Reports what the live Drive DOM actually contains, so probes can be written
 // from evidence instead of guesswork. Returns counts and small samples only —
 // never file contents.
-async function diagnose(folderId) {
+//
+// opts.probeUpload: additionally clicks New -> File upload with the file
+// chooser INTERCEPTED, to learn whether Chromium hands us a backendNodeId we
+// can feed to DOM.setFileInputFiles. Nothing is ever uploaded: the chooser is
+// cancelled and no files are supplied.
+async function diagnose(folderId, opts = {}) {
   const login = await ensureLoggedIn();
   if (!login.loggedIn) return { loggedIn: false, url: login.url };
 
   const nav = folderId ? await navigateToFolder(folderId) : { url: login.url, folderId: null };
   const win = getDriveWindow({ show: false });
 
-  // Give the SPA a moment to render its listing before sampling the DOM.
-  await waitForSelector(win, '[data-id]', 15000);
+  // Drive is an SPA: did-stop-loading fires before the listing renders.
+  await waitForSelector(win, '[role=main]', 15000);
+  await sleep(1500);
 
   const report = await win.webContents.executeJavaScript(`(() => {
     const sample = (list, n) => Array.prototype.slice.call(list, 0, n);
@@ -107,11 +177,9 @@ async function diagnose(folderId) {
       role: el.getAttribute('role'),
       ariaLabel: el.getAttribute('aria-label'),
       dataId: el.getAttribute('data-id'),
-      dataTooltip: el.getAttribute('data-tooltip'),
       text: (el.innerText || '').trim().slice(0, 60),
     });
     const fileInputs = document.querySelectorAll('input[type=file]');
-    const dataIdEls = document.querySelectorAll('[data-id]');
     const buttons = document.querySelectorAll('[role=button],button');
     const newBtns = Array.prototype.filter.call(buttons, b => {
       const s = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
@@ -120,29 +188,55 @@ async function diagnose(folderId) {
     return {
       title: document.title,
       href: location.href,
-      lang: document.documentElement.lang,
       counts: {
         fileInputs: fileInputs.length,
-        dataIdElements: dataIdEls.length,
         buttons: buttons.length,
         newButtonCandidates: newBtns.length,
       },
-      fileInputs: sample(fileInputs, 5).map(i => ({
-        multiple: i.multiple,
-        accept: i.accept,
-        hidden: i.hidden,
-        name: i.name,
-        id: i.id,
-        className: (i.className || '').slice(0, 80),
-        parentRole: i.parentElement && i.parentElement.getAttribute('role'),
-      })),
-      dataIdSamples: sample(dataIdEls, 8).map(desc),
-      newButtonSamples: newBtns.slice(0, 8).map(desc),
-      mainRegions: sample(document.querySelectorAll('[role=main],[role=grid],[role=list]'), 5).map(desc),
+      newButtonSamples: newBtns.slice(0, 5).map(desc),
     };
   })()`);
 
-  return { loggedIn: true, navigatedTo: nav, report };
+  const rows = await win.webContents.executeJavaScript(ROW_SAMPLE_SCRIPT);
+
+  let uploadProbe = null;
+  if (opts.probeUpload) {
+    uploadProbe = await withDebugger(win, async (dbg) => {
+      const events = [];
+      const onMessage = (_e, method, params) => {
+        if (method === 'Page.fileChooserOpened') events.push({ method, params });
+      };
+      dbg.on('message', onMessage);
+      try {
+        await dbg.sendCommand('Page.enable');
+        await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+
+        const clickedNew = await win.webContents.executeJavaScript(clickByTextScript('New'));
+        await sleep(1500);
+        const menu = await win.webContents.executeJavaScript(DUMP_MENU_SCRIPT);
+
+        const clickedUpload = await win.webContents.executeJavaScript(clickByTextScript('File upload'));
+        await sleep(2000);
+
+        return {
+          clickedNew,
+          menuItems: menu,
+          clickedUpload,
+          fileChooserIntercepted: events.length > 0,
+          fileChooserEvent: events[0] ? events[0].params : null,
+        };
+      } finally {
+        dbg.removeListener('message', onMessage);
+        try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
+        // Close any menu/dialog left open so the page is clean for the next run.
+        await win.webContents.executeJavaScript(
+          'document.body.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true})), true'
+        ).catch(() => {});
+      }
+    });
+  }
+
+  return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe };
 }
 
 module.exports = {
@@ -152,5 +246,6 @@ module.exports = {
   ensureLoggedIn,
   navigateToFolder,
   diagnose,
+  withDebugger,
   PARTITION,
 };

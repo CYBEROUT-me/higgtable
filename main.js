@@ -320,10 +320,10 @@ ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
 
 ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
 ipcMain.handle('get-log-path', () => logFilePath);
-ipcMain.handle('drive-diagnose', async (_e, folderId) => {
+ipcMain.handle('drive-diagnose', async (_e, folderId, opts) => {
   try {
     log(`drive-diagnose: starting${folderId ? ` for folder ${folderId}` : ' (no folder)'}`);
-    const result = await driveBrowser.diagnose(folderId);
+    const result = await driveBrowser.diagnose(folderId, opts || {});
     log(`drive-diagnose: loggedIn=${result.loggedIn}`);
     return result;
   } catch (err) {

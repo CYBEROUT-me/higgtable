@@ -31,5 +31,5 @@ contextBridge.exposeInMainWorld('app', {
   log:               (msg)         => ipcRenderer.invoke('log', msg),
   getLogPath:        ()            => ipcRenderer.invoke('get-log-path'),
   openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
-  driveDiagnose:     (folderId)    => ipcRenderer.invoke('drive-diagnose', folderId),
+  driveDiagnose:     (folderId, o) => ipcRenderer.invoke('drive-diagnose', folderId, o),
 });
