@@ -339,7 +339,59 @@ async function diagnose(folderId, opts = {}) {
     });
   }
 
-  return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe };
+  // Probes the New folder dialog: opens it, records its input/buttons, then
+  // cancels with Escape. Nothing is created.
+  let newFolderProbe = null;
+  if (opts.probeNewFolder) {
+    win.show();
+    win.focus();
+    win.webContents.focus();
+    await sleep(600);
+    try {
+      await win.webContents.executeJavaScript(clickByTextScript('New'));
+      await sleep(1500);
+      const target = await win.webContents.executeJavaScript(`(() => {
+        const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+        const it = [...document.querySelectorAll('[role=menuitem]')].find(e => {
+          const r = e.getBoundingClientRect();
+          return e.offsetParent !== null && r.width > 0 && norm(e.innerText).startsWith('New folder');
+        });
+        if (!it) return null;
+        const r = it.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      })()`);
+      if (target) {
+        // Menu items need REAL input events; synthetic DOM clicks don't activate them.
+        win.webContents.sendInputEvent({ type: 'mouseMove', x: target.x, y: target.y });
+        await sleep(150);
+        win.webContents.sendInputEvent({ type: 'mouseDown', x: target.x, y: target.y, button: 'left', clickCount: 1 });
+        win.webContents.sendInputEvent({ type: 'mouseUp', x: target.x, y: target.y, button: 'left', clickCount: 1 });
+        await sleep(2000);
+      }
+      newFolderProbe = await win.webContents.executeJavaScript(`(() => {
+        const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+        const vis = e => { const r = e.getBoundingClientRect(); return e.offsetParent !== null && r.width > 0 && r.height > 0; };
+        const inputs = [...document.querySelectorAll('input,textarea')].filter(vis).map(e => ({
+          tag: e.tagName, type: e.type, value: e.value, ariaLabel: norm(e.getAttribute('aria-label')).slice(0, 40),
+          placeholder: e.placeholder, id: e.id, className: (e.className || '').slice(0, 60),
+        }));
+        const dialogs = [...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(vis).map(e => ({
+          role: e.getAttribute('role'), ariaLabel: norm(e.getAttribute('aria-label')).slice(0, 40),
+          text: norm(e.innerText).slice(0, 120),
+        }));
+        const buttons = [...document.querySelectorAll('[role=dialog] button,[role=dialog] [role=button]')].filter(vis)
+          .map(e => norm(e.innerText).slice(0, 25));
+        return { menuOpened: ${target ? 'true' : 'false'}, inputs, dialogs, dialogButtons: buttons };
+      })()`);
+    } finally {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+      await sleep(300);
+      win.hide();
+    }
+  }
+
+  return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe, newFolderProbe };
 }
 
 module.exports = {
