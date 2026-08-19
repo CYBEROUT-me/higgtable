@@ -445,6 +445,29 @@ async function execJS(win, label, script) {
   }
 }
 
+// Snapshot of what the Drive page actually looks like right now. Used in error
+// messages so a failure reports observed reality instead of leaving us guessing.
+async function pageState(win) {
+  const base = {
+    url: win.webContents.getURL(),
+    windowVisible: win.isVisible(),
+    loading: win.webContents.isLoading(),
+  };
+  try {
+    const dom = await win.webContents.executeJavaScript(`(() => ({
+      title: document.title,
+      main: document.querySelectorAll('[role=main]').length,
+      gridcell: document.querySelectorAll('[role=gridcell]').length,
+      gridcellWithId: document.querySelectorAll('[role=gridcell][data-id]').length,
+      dataId: document.querySelectorAll('[data-id]').length,
+      bodyText: (document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 200),
+    }))()`);
+    return { ...base, ...dom };
+  } catch (err) {
+    return { ...base, domError: err.message };
+  }
+}
+
 // ── Operations ──────────────────────────────────────────────────────────
 // Interaction rules learned from the 2026-08-19 diagnostics:
 //   * A synthetic pointer sequence DOES open the New menu.
@@ -583,7 +606,6 @@ async function createFolder(parentId, name) {
   if (!createBtn) throw new Error('could not find the Create button — run driveDiagnose and update drive-probes.js');
   await realClickAt(win, createBtn);
   await sleep(2500);
-  win.hide();
 }
 
 // Find-or-create with the duplicate guard. The ONLY sanctioned way to obtain a
@@ -609,15 +631,15 @@ async function findOrCreateFolder(parentId, name) {
   const deadline = Date.now() + 25000;
   while (Date.now() < deadline) {
     await sleep(2000);
-    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
     after = items.filter(i => i.isFolder && i.name === name).map(i => i.id);
     if (after.length) break;
   }
 
   if (after.length !== 1) {
-    const all = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
-    const folderNames = all.filter(i => i.isFolder).map(i => i.name);
-    throw new Error(`Created "${name}" but read back ${after.length} matches. Folders now in parent: ${JSON.stringify(folderNames)} — aborting before upload to avoid duplicating files.`);
+    const all = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(e => ({ err: e.message }));
+    const state = await pageState(win);
+    throw new Error(`Created "${name}" but read back ${after.length} matches.\nItems seen: ${JSON.stringify(all)}\nPage state: ${JSON.stringify(state)}`);
   }
   return after[0];
 }
