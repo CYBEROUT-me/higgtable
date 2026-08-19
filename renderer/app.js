@@ -62,6 +62,19 @@ const state = {
   selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
   workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
   driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
+  driveAppFolders: {}, // { appCode: driveFolderId } for delivery destinations; missing/blank = uploads abort
+  driveIncludeProjectFiles: false, // ship .aep/.psd sources too; off while testing the automation
+};
+
+// App-code -> display name for the Drive delivery folder. Codes are the first
+// token of a task Name; folder names end in "_creatives". Mirror apps use
+// different leading codes and can be added here.
+const DRIVE_APP_LABELS = {
+  CMC: 'Call Me Chat_creatives',
+  LO: 'Lowins_creatives',
+  OL: 'Olive_creatives',
+  PL: 'Plamfy_creatives',
+  TL: 'TopLive_creatives',
 };
 
 let currentDetailRecord = null;
@@ -206,6 +219,8 @@ async function boot() {
   const settings = await window.app.getSettings();
   state.workingDirectory = settings.workingDirectory || '';
   state.driveAccountIndex = settings.driveAccountIndex || '';
+  state.driveAppFolders = settings.driveAppFolders || {};
+  state.driveIncludeProjectFiles = settings.driveIncludeProjectFiles === true;
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
     log('boot: no API key, showing settings modal');
@@ -1848,7 +1863,51 @@ function showSettingsModal(forced = false) {
   document.getElementById('api-key-input').value = '';
   document.getElementById('working-dir-input').value = state.workingDirectory || '';
   document.getElementById('drive-account-index-input').value = state.driveAccountIndex || '';
+  renderDriveAppFolderRows();
+  document.getElementById('drive-include-project-input').checked = state.driveIncludeProjectFiles;
   document.getElementById('api-key-input').focus();
+}
+
+// One row per app code: a code label plus an input that accepts a pasted Drive
+// folder URL. The input displays the parsed folder ID rather than the URL, so
+// what is stored is visibly what will be used.
+function renderDriveAppFolderRows() {
+  const wrap = document.getElementById('drive-app-folders');
+  wrap.innerHTML = '';
+  Object.entries(DRIVE_APP_LABELS).forEach(([code, label]) => {
+    const row = document.createElement('div');
+    row.className = 'drive-folder-row';
+
+    const codeEl = document.createElement('span');
+    codeEl.className = 'drive-folder-code';
+    codeEl.textContent = code;
+    codeEl.title = label;
+    row.appendChild(codeEl);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = `${label} — paste folder URL`;
+    input.value = state.driveAppFolders[code] || '';
+    input.addEventListener('change', async () => {
+      const raw = input.value.trim();
+      if (!raw) {
+        delete state.driveAppFolders[code];
+      } else {
+        const id = parseFolderIdFromUrl(raw);
+        if (!id) {
+          input.value = '';
+          alert(`That doesn't look like a Drive folder URL.\n\nOpen the ${label} folder in Drive and copy the address bar — it should contain "/folders/".`);
+          return;
+        }
+        state.driveAppFolders[code] = id;
+      }
+      input.value = state.driveAppFolders[code] || '';
+      await window.app.saveSettings({ driveAppFolders: state.driveAppFolders });
+      log(`drive-app-folders: ${code} -> ${state.driveAppFolders[code] || '(cleared)'}`);
+    });
+    row.appendChild(input);
+    wrap.appendChild(row);
+  });
 }
 
 function hideSettingsModal() {
@@ -1971,6 +2030,12 @@ document.getElementById('drive-account-index-input').addEventListener('change', 
   state.driveAccountIndex = value;
   await window.app.saveSettings({ driveAccountIndex: value });
   log(`drive-account-index-input: Drive account index set to "${value}"`);
+});
+
+document.getElementById('drive-include-project-input').addEventListener('change', async (e) => {
+  state.driveIncludeProjectFiles = e.target.checked;
+  await window.app.saveSettings({ driveIncludeProjectFiles: state.driveIncludeProjectFiles });
+  log(`drive-include-project-input: project files ${state.driveIncludeProjectFiles ? 'INCLUDED' : 'excluded'}`);
 });
 
 document.getElementById('record-modal-close').addEventListener('click', closeRecordModal);

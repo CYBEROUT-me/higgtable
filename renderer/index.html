@@ -166,6 +166,14 @@
       <p>Opens Drive links with this account index (drive.google.com/drive/u/N/...) — leave blank to open links as-is:</p>
       <input type="number" id="drive-account-index-input" min="0" placeholder="e.g. 2">
 
+      <h2>Drive Delivery Folders</h2>
+      <p>Paste each app's "<code>&lt;App&gt;_creatives</code>" folder URL from Drive (open the folder, copy the address). Required before uploading:</p>
+      <div id="drive-app-folders"></div>
+      <label id="drive-include-project-label">
+        <input type="checkbox" id="drive-include-project-input">
+        Also upload project/source files (.aep, .psd, ...) — leave off while testing the automation
+      </label>
+
       <div class="modal-actions">
         <button id="settings-save-btn" class="primary">Save</button>
         <button id="settings-cancel-btn">Cancel</button>
@@ -212,6 +220,7 @@
   <script src="dashboard-data.js"></script>
   <script src="markdown-data.js"></script>
   <script src="drive-links.js"></script>
+  <script src="drive-path.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>
   <script src="canvas.js"></script>
