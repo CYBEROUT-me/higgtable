@@ -6,7 +6,7 @@
 
 **Architecture:** Pure path logic lives in a Jest-tested renderer module (`drive-path.js`). All browser automation lives in the main process (`drive-browser.js`), driving a persistent-session `BrowserWindow`; every DOM assumption is isolated in one `drive-probes.js` file. Because the automation requires the user's authenticated Google session, DOM selectors are **discovered from a diagnostic run** rather than guessed, and the Airtable write stays disabled until the full path is confirmed once.
 
-**Tech Stack:** Electron (BrowserWindow with `partition: 'persist:gdrive'`, `webContents.executeJavaScript`), plain JS, Jest for pure logic. No new dependencies, no Google API, no OAuth.
+**Tech Stack:** Electron (BrowserWindow with `partition: 'persist:gdrive'`, `webContents.executeJavaScript`, and `webContents.debugger` for CDP `DOM.setFileInputFiles` uploads), plain JS, Jest for pure logic. No new dependencies, no Google API, no OAuth.
 
 ## Global Constraints
 
@@ -25,10 +25,11 @@ These exist to prevent the automation from making a mess in real client folders 
 
 1. **The upload source must be the task folder, verified by name.** Before reading any file, assert `basename(dir) === taskName`. Without this, a click before renaming would point at the raw working directory (e.g. the After Effects folder) and upload hundreds of unrelated files into a client's Drive.
 2. **Never create a folder that may already exist.** Folder lookup returns *all* name matches: 0 → create, 1 → use, **more than 1 → abort**. A wrong probe otherwise silently creates a duplicate `08_August` on every attempt, compounding with each retry.
-3. **Size ceilings, checked before reading bytes.** Per-file 100 MB, per-delivery 500 MB. File bytes cross into the page as base64 (~1.33× size), so an unguarded multi-GB source file would exhaust memory and hang the app instead of failing cleanly.
-4. **Read-only locally.** This feature never creates, moves, renames, or deletes anything on disk — only reads. All local file mutation stays in the existing `performRename()`.
-5. **Never dry-run inside a client folder.** Test runs target a scratch folder the user owns in their own My Drive, passed explicitly — never a configured `<App>_creatives` folder.
-6. **Isolated browser session.** The Drive window uses its own `persist:gdrive` partition, so it cannot disturb the user's real Chrome profile, cookies, or logged-in sessions.
+3. **Uploads go through Chrome DevTools Protocol, not base64.** `DOM.setFileInputFiles` hands Chromium a *file path* and lets it read from disk natively — the same mechanism Puppeteer and Playwright use. This has no practical size ceiling, which is required because project/source files (`.aep` and friends) must ship in the final version. The base64 injection path survives only as a small-file fallback, capped at 50 MB per file, since it holds the whole file in memory twice.
+4. **Project files are excluded during testing, included in the final version.** Controlled by one setting (`driveIncludeProjectFiles`, default off). Excluded files are always listed in the confirm dialog so it's never ambiguous what did and didn't ship.
+5. **Read-only locally.** This feature never creates, moves, renames, or deletes anything on disk — only reads. All local file mutation stays in the existing `performRename()`.
+6. **Never dry-run inside a client folder.** Test runs target a scratch folder the user owns in their own My Drive, passed explicitly — never a configured `<App>_creatives` folder.
+7. **Isolated browser session.** The Drive window uses its own `persist:gdrive` partition, so it cannot disturb the user's real Chrome profile, cookies, or logged-in sessions.
 
 ## File structure
 
@@ -58,6 +59,8 @@ These exist to prevent the automation from making a mess in real client folders 
   - `monthFolderName(todayISO)` → `string|null` — `'2026-08-19'` → `'08_August'`.
   - `resolveAppFolderId(code, mapping)` → `string|null` — `null` for unrecognized codes.
   - `parseFolderIdFromUrl(url)` → `string|null` — pulls `<id>` out of a `/folders/<id>` URL.
+  - `PROJECT_FILE_EXTS` — the extensions treated as project/source files.
+  - `partitionUploadFiles(filePaths, includeProjectFiles)` → `{ include: string[], excluded: string[] }` — splits deliverables from project files so the caller can show exactly what will and won't ship.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -69,6 +72,7 @@ const {
   monthFolderName,
   resolveAppFolderId,
   parseFolderIdFromUrl,
+  partitionUploadFiles,
 } = require('../renderer/drive-path');
 
 test('appCodeFromTaskName takes the first underscore-separated token', () => {
@@ -143,6 +147,37 @@ test('parseFolderIdFromUrl returns null for non-folder URLs', () => {
   expect(parseFolderIdFromUrl('')).toBeNull();
   expect(parseFolderIdFromUrl(null)).toBeNull();
 });
+
+test('partitionUploadFiles excludes project files when the flag is off', () => {
+  const files = [
+    '/t/CMC_1_9x16.mp4',
+    '/t/CMC_1_1x1.png',
+    '/t/CMC_1.aep',
+    '/t/CMC_1.psd',
+  ];
+  const { include, excluded } = partitionUploadFiles(files, false);
+  expect(include).toEqual(['/t/CMC_1_9x16.mp4', '/t/CMC_1_1x1.png']);
+  expect(excluded).toEqual(['/t/CMC_1.aep', '/t/CMC_1.psd']);
+});
+
+test('partitionUploadFiles includes everything when the flag is on', () => {
+  const files = ['/t/a.mp4', '/t/b.aep'];
+  const { include, excluded } = partitionUploadFiles(files, true);
+  expect(include).toEqual(files);
+  expect(excluded).toEqual([]);
+});
+
+test('partitionUploadFiles matches extensions case-insensitively', () => {
+  const { include, excluded } = partitionUploadFiles(['/t/A.AEP', '/t/b.MP4'], false);
+  expect(excluded).toEqual(['/t/A.AEP']);
+  expect(include).toEqual(['/t/b.MP4']);
+});
+
+test('partitionUploadFiles keeps extensionless files as deliverables', () => {
+  const { include, excluded } = partitionUploadFiles(['/t/README'], false);
+  expect(include).toEqual(['/t/README']);
+  expect(excluded).toEqual([]);
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -203,13 +238,33 @@ function parseFolderIdFromUrl(url) {
   return null;
 }
 
+// Project/source files. Excluded while testing the automation, included in
+// the final version — clients receive the editable project, not just renders.
+const PROJECT_FILE_EXTS = ['aep', 'psd', 'ai', 'prproj', 'aet', 'c4d', 'blend'];
+
+// Splits a task folder's files into what will ship and what won't, so the
+// caller can show both. Files with no extension count as deliverables.
+function partitionUploadFiles(filePaths, includeProjectFiles) {
+  if (includeProjectFiles) return { include: [...filePaths], excluded: [] };
+  const include = [];
+  const excluded = [];
+  filePaths.forEach(p => {
+    const base = p.split('/').pop();
+    const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
+    (ext && PROJECT_FILE_EXTS.includes(ext) ? excluded : include).push(p);
+  });
+  return { include, excluded };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MONTH_NAMES,
+    PROJECT_FILE_EXTS,
     appCodeFromTaskName,
     monthFolderName,
     resolveAppFolderId,
     parseFolderIdFromUrl,
+    partitionUploadFiles,
   };
 }
 ```
@@ -217,12 +272,12 @@ if (typeof module !== 'undefined' && module.exports) {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx jest tests/drive-path.test.js`
-Expected: PASS (10/10).
+Expected: PASS (14/14).
 
 - [ ] **Step 5: Run the full suite**
 
 Run: `npm test`
-Expected: PASS, 76/76 (66 existing + 10 new).
+Expected: PASS, 80/80 (66 existing + 14 new).
 
 - [ ] **Step 6: Commit**
 
@@ -285,6 +340,10 @@ Change to:
       <h2>Drive Delivery Folders</h2>
       <p>Paste each app's "<code>&lt;App&gt;_creatives</code>" folder URL from Drive (open the folder, copy the address). Required before uploading:</p>
       <div id="drive-app-folders"></div>
+      <label id="drive-include-project-label">
+        <input type="checkbox" id="drive-include-project-input">
+        Also upload project/source files (.aep, .psd, ...) — leave off while testing the automation
+      </label>
 
       <div class="modal-actions">
 ```
@@ -297,6 +356,7 @@ Add to the `state` object, right after the `driveAccountIndex` line:
 
 ```javascript
   driveAppFolders: {}, // { appCode: driveFolderId } for delivery destinations; missing/blank = uploads abort
+  driveIncludeProjectFiles: false, // ship .aep/.psd sources too; off while testing the automation
 ```
 
 Add near the other module-level constants (e.g. below `PRIORITY_RANK`):
@@ -372,6 +432,7 @@ Change to:
 ```javascript
   state.driveAccountIndex = settings.driveAccountIndex || '';
   state.driveAppFolders = settings.driveAppFolders || {};
+  state.driveIncludeProjectFiles = settings.driveIncludeProjectFiles === true;
 ```
 
 In `showSettingsModal()`, find:
@@ -384,6 +445,17 @@ Add after it:
 
 ```javascript
   renderDriveAppFolderRows();
+  document.getElementById('drive-include-project-input').checked = state.driveIncludeProjectFiles;
+```
+
+And wire the checkbox once, beside the other settings listeners:
+
+```javascript
+document.getElementById('drive-include-project-input').addEventListener('change', async (e) => {
+  state.driveIncludeProjectFiles = e.target.checked;
+  await window.app.saveSettings({ driveIncludeProjectFiles: state.driveIncludeProjectFiles });
+  log(`drive-include-project-input: project files ${state.driveIncludeProjectFiles ? 'INCLUDED' : 'excluded'}`);
+});
 ```
 
 - [ ] **Step 5: Add CSS**
@@ -401,6 +473,8 @@ Add after it:
 .drive-folder-row { display: flex; align-items: center; gap: var(--space-3); }
 .drive-folder-code { flex-shrink: 0; width: 38px; font-size: 11px; font-weight: 600; color: var(--accent); font-family: monospace; }
 .drive-folder-row input[type=text] { flex: 1; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 11px; font-family: monospace; }
+#drive-include-project-label { display: flex; align-items: center; gap: var(--space-2); font-size: 11px; color: var(--text-secondary); margin-bottom: var(--space-5); cursor: pointer; }
+#drive-include-project-label input[type=checkbox] { width: auto; }
 ```
 
 - [ ] **Step 6: Verify in a fresh browser tab**
@@ -441,7 +515,7 @@ Expected: `loStored: null`, `inputCleared: true` (an `alert` also fires — dism
 - [ ] **Step 7: Run the full suite and commit**
 
 Run: `npm test`
-Expected: PASS, 76/76 (unchanged — this task adds no pure logic).
+Expected: PASS, 80/80 (unchanged — this task adds no pure logic).
 
 ```bash
 git add renderer/index.html renderer/app.js renderer/styles.css
@@ -643,7 +717,7 @@ Add after it:
 - [ ] **Step 4: Syntax-check what can be checked without a session**
 
 Run: `node --check drive-browser.js && node --check main.js && node --check preload.js && npm test`
-Expected: no syntax errors; tests PASS 76/76.
+Expected: no syntax errors; tests PASS 80/80.
 
 This is the limit of what's verifiable by the implementing agent — everything below needs the user's Google session.
 
@@ -825,46 +899,50 @@ async function findOrCreateFolder(parentId, name) {
 
 `createFolder(parentId, name)` drives the New → New folder → type name flow using `PROBES.newButton`, `PROBES.newFolderMenuItem`, and `PROBES.folderNameField`, clicking via `element.click()` in the page context (never coordinates). It returns the new folder's id if it can read one, or `null` — `findOrCreateFolder` above is responsible for confirming the result, so `createFolder` is never called directly elsewhere.
 
-`uploadFiles` reads bytes in the main process and injects them, primary strategy first:
+`uploadFiles` hands Chromium the file **paths** via the DevTools Protocol so it reads from disk itself — this is how Puppeteer and Playwright do uploads, it imposes no size ceiling, and it's more reliable than synthesising drag events. The base64 route stays only as a fallback for small files:
 
 ```javascript
 const fs = require('fs');
 const path = require('path');
 
-// File bytes reach the page as base64 (~1.33x size) because executeJavaScript
-// serializes arguments as JSON and cannot carry binary. Unguarded, a multi-GB
-// After Effects source would exhaust memory and hang the app rather than fail
-// cleanly — so sizes are checked BEFORE anything is read.
-const MAX_FILE_BYTES = 100 * 1024 * 1024;   // 100 MB per file
-const MAX_TOTAL_BYTES = 500 * 1024 * 1024;  // 500 MB per delivery
+// The fallback path only: base64 through executeJavaScript holds the whole
+// file in memory twice, so it is capped low. The primary CDP path below has
+// no such limit, which is what makes delivering .aep project files viable.
+const MAX_FALLBACK_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 
-function assertUploadSizes(filePaths) {
-  let total = 0;
-  const tooBig = [];
-  for (const p of filePaths) {
-    const { size } = fs.statSync(p);
-    total += size;
-    if (size > MAX_FILE_BYTES) {
-      tooBig.push(`${path.basename(p)} (${(size / 1048576).toFixed(0)} MB)`);
-    }
-  }
-  if (tooBig.length) {
-    throw new Error(`Refusing to upload — over the ${MAX_FILE_BYTES / 1048576} MB per-file limit: ${tooBig.join(', ')}. Remove these from the task folder (or exclude source files) and retry.`);
-  }
-  if (total > MAX_TOTAL_BYTES) {
-    throw new Error(`Refusing to upload — ${(total / 1048576).toFixed(0)} MB total exceeds the ${MAX_TOTAL_BYTES / 1048576} MB limit for one delivery.`);
+// PRIMARY: hand Chromium the file PATHS and let it read from disk natively
+// (the mechanism Puppeteer/Playwright use). No size ceiling, no base64, and it
+// triggers the same input/change events Drive's own uploader listens for.
+async function uploadViaDebugger(win, filePaths) {
+  const dbg = win.webContents.debugger;
+  if (!dbg.isAttached()) dbg.attach('1.3');
+  try {
+    await dbg.sendCommand('DOM.enable');
+    const { root } = await dbg.sendCommand('DOM.getDocument', { depth: -1, pierce: true });
+    const { nodeId } = await dbg.sendCommand('DOM.querySelector', {
+      nodeId: root.nodeId,
+      selector: PROBES.fileInput.selector,
+    });
+    if (!nodeId) return null; // no file input found — caller falls back
+    await dbg.sendCommand('DOM.setFileInputFiles', { files: filePaths, nodeId });
+    return 'debugger';
+  } finally {
+    if (dbg.isAttached()) dbg.detach();
   }
 }
 
-async function uploadFiles(folderId, filePaths) {
-  assertUploadSizes(filePaths);
-  await navigateToFolder(folderId);
-  const win = getDriveWindow({ show: false });
+// FALLBACK: build File objects in the page from base64 and dispatch a synthetic
+// drop. Small files only, and only when the CDP path found no file input.
+async function uploadViaDrop(win, filePaths) {
+  const tooBig = filePaths.filter(p => fs.statSync(p).size > MAX_FALLBACK_FILE_BYTES);
+  if (tooBig.length) {
+    throw new Error(`Upload fallback cannot handle files over ${MAX_FALLBACK_FILE_BYTES / 1048576} MB: ${tooBig.map(p => path.basename(p)).join(', ')}. The file-input probe needs fixing — run driveDiagnose.`);
+  }
   const payload = filePaths.map(p => ({
     name: path.basename(p),
     b64: fs.readFileSync(p).toString('base64'),
   }));
-  const ok = await win.webContents.executeJavaScript(`(async () => {
+  return win.webContents.executeJavaScript(`(() => {
     const files = ${JSON.stringify(payload)}.map(f => {
       const bin = atob(f.b64);
       const bytes = new Uint8Array(bin.length);
@@ -873,23 +951,26 @@ async function uploadFiles(folderId, filePaths) {
     });
     const dt = new DataTransfer();
     files.forEach(f => dt.items.add(f));
-    const input = document.querySelector(${JSON.stringify(PROBES.fileInput.selector)});
-    if (input) {
-      input.files = dt.files;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      return 'input';
-    }
     const target = document.querySelector(${JSON.stringify(PROBES.dropTarget.selector)});
     if (!target) return null;
     target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
     return 'drop';
   })()`);
-  if (!ok) throw new Error('no upload target found — run driveDiagnose and update drive-probes.js');
-  return { strategy: ok, uploaded: payload.map(f => f.name) };
+}
+
+async function uploadFiles(folderId, filePaths) {
+  await navigateToFolder(folderId);
+  const win = getDriveWindow({ show: false });
+  const strategy = (await uploadViaDebugger(win, filePaths))
+                || (await uploadViaDrop(win, filePaths));
+  if (!strategy) {
+    throw new Error('no upload target found — run driveDiagnose and update drive-probes.js');
+  }
+  return { strategy, uploaded: filePaths.map(p => path.basename(p)) };
 }
 ```
 
-Base64 is used because `executeJavaScript` serializes arguments as JSON and cannot carry raw binary.
+`DOM.setFileInputFiles` takes absolute paths and needs no size guard — Chromium streams from disk, which is what makes multi-GB project files deliverable. The debugger is detached in a `finally`, so a mid-upload failure cannot leave it attached and block later runs.
 
 `listFolderFileNames(folderId)` navigates fresh and returns the visible item labels via `PROBES.folderRow`, used for verification.
 
@@ -963,7 +1044,7 @@ In `preload.js`, after `driveDiagnose`:
 - [ ] **Step 6: Syntax-check**
 
 Run: `node --check drive-browser.js && node --check drive-probes.js && node --check main.js && node --check preload.js && npm test`
-Expected: no syntax errors; tests PASS 76/76.
+Expected: no syntax errors; tests PASS 80/80.
 
 - [ ] **Step 7: USER RUNS AN END-TO-END DRY RUN — no Airtable write yet**
 
@@ -1060,10 +1141,22 @@ async function uploadTaskToDrive() {
     return;
   }
 
-  const filePaths = await window.app.findAssetFilesInFolder(sourceDir);
-  if (!filePaths.length) { alert(`No files found in ${sourceDir}`); return; }
+  const allFiles = await window.app.findAssetFilesInFolder(sourceDir);
+  if (!allFiles.length) { alert(`No files found in ${sourceDir}`); return; }
 
-  if (!confirm(`Upload ${filePaths.length} file(s) to Drive?\n\n${DRIVE_APP_LABELS[code] || code} / ${monthFolderName(toISO(new Date()))} / ${taskName}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}`)) {
+  // Project/source files ship only when the setting is on. Excluded files are
+  // always listed below so it is never ambiguous what did and didn't go.
+  const { include: filePaths, excluded } = partitionUploadFiles(allFiles, state.driveIncludeProjectFiles);
+  if (!filePaths.length) {
+    alert(`Nothing to upload — all ${allFiles.length} file(s) are project files, and "Also upload project/source files" is off in Settings.`);
+    return;
+  }
+
+  const destination = `${DRIVE_APP_LABELS[code] || code} / ${monthFolderName(toISO(new Date()))} / ${taskName}`;
+  const skipNote = excluded.length
+    ? `\n\nNOT uploading ${excluded.length} project file(s):\n${excluded.map(p => p.split('/').pop()).join('\n')}`
+    : '';
+  if (!confirm(`Upload ${filePaths.length} file(s) to Drive?\n\n${destination}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}${skipNote}`)) {
     return;
   }
 
@@ -1134,7 +1227,7 @@ document.getElementById('drive-upload-btn').addEventListener('click', uploadTask
 - [ ] **Step 5: Syntax-check and run the suite**
 
 Run: `node --check main.js && node --check preload.js && npm test`
-Expected: no syntax errors; tests PASS 76/76.
+Expected: no syntax errors; tests PASS 80/80.
 
 - [ ] **Step 6: USER VERIFIES END TO END**
 
