@@ -110,7 +110,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // rather than a bare element.click(), so this dispatches the full sequence.
 function clickByTextScript(label) {
   return `(() => {
-    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
     const want = ${JSON.stringify(label)};
     const all = [...document.querySelectorAll('[role=button],button,[role=menuitem],[role=option]')];
     const visible = all.filter(e => {
@@ -143,7 +143,7 @@ function clickByTextScript(label) {
 // in the DOM and picked up a hidden Help menu, which looked like the New menu
 // had opened when it hadn't.
 const DUMP_MENU_SCRIPT = `(() => {
-  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   const items = [...document.querySelectorAll('[role=menuitem],[role=option]')].filter(e => {
     const r = e.getBoundingClientRect();
     return e.offsetParent !== null && r.width > 0 && r.height > 0;
@@ -159,7 +159,7 @@ const DUMP_MENU_SCRIPT = `(() => {
 // of the duplicate "New" buttons is the real one.
 function describeCandidatesScript(label) {
   return `(() => {
-    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
     const want = ${JSON.stringify(label)};
     return [...document.querySelectorAll('[role=button],button')]
       .filter(e => norm(e.innerText).startsWith(want) || norm(e.getAttribute('aria-label')).startsWith(want))
@@ -304,7 +304,7 @@ async function diagnose(folderId, opts = {}) {
           await win.webContents.executeJavaScript(clickByTextScript('New'));
           await sleep(1500);
           mouseTarget = await win.webContents.executeJavaScript(`(() => {
-            const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+            const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
             const it = [...document.querySelectorAll('[role=menuitem]')].find(e => {
               const r = e.getBoundingClientRect();
               return e.offsetParent !== null && r.width > 0 && norm(e.innerText).startsWith('File upload');
@@ -354,7 +354,7 @@ async function diagnose(folderId, opts = {}) {
       await win.webContents.executeJavaScript(clickByTextScript('New'));
       await sleep(1500);
       const target = await win.webContents.executeJavaScript(`(() => {
-        const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+        const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
         const it = [...document.querySelectorAll('[role=menuitem]')].find(e => {
           const r = e.getBoundingClientRect();
           return e.offsetParent !== null && r.width > 0 && norm(e.innerText).startsWith('New folder');
@@ -372,7 +372,7 @@ async function diagnose(folderId, opts = {}) {
         await sleep(2000);
       }
       newFolderProbe = await win.webContents.executeJavaScript(`(() => {
-        const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+        const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
         const vis = e => { const r = e.getBoundingClientRect(); return e.offsetParent !== null && r.width > 0 && r.height > 0; };
         const inputs = [...document.querySelectorAll('input,textarea')].filter(vis).map(e => ({
           tag: e.tagName, type: e.type, value: e.value, ariaLabel: norm(e.getAttribute('aria-label')).slice(0, 40),
@@ -398,6 +398,17 @@ async function diagnose(folderId, opts = {}) {
 }
 
 
+// Electron's executeJavaScript failure message ("Script failed to execute")
+// names neither the script nor the cause, which makes debugging blind. Wrap
+// each call with a label so a broken script identifies itself.
+async function execJS(win, label, script) {
+  try {
+    return await win.webContents.executeJavaScript(script);
+  } catch (err) {
+    throw new Error(`page script "${label}" failed: ${err.message}`);
+  }
+}
+
 // ── Operations ──────────────────────────────────────────────────────────
 // Interaction rules learned from the 2026-08-19 diagnostics:
 //   * A synthetic pointer sequence DOES open the New menu.
@@ -417,7 +428,7 @@ async function realClickAt(win, point) {
 // Centre coordinates of the first VISIBLE element matching a probe's text.
 function locateByTextScript(text, selector) {
   return `(() => {
-    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
     const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => {
       const r = e.getBoundingClientRect();
       return e.offsetParent !== null && r.width > 0 && r.height > 0 &&
@@ -450,12 +461,12 @@ async function preflight() {
 
 // Lists the children of the currently-open folder view.
 const LIST_ITEMS_SCRIPT = `(() => {
-  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   return [...document.querySelectorAll(${JSON.stringify(PROBES.itemRow.selector)})].map(el => {
     const aria = el.getAttribute('aria-label') || '';
     return {
       id: el.getAttribute(${JSON.stringify(PROBES.itemRow.idAttribute)}),
-      name: (el.innerText || '').split('\n')[0].trim(),
+      name: (el.innerText || '').split('\\n')[0].trim(),
       isFolder: aria.endsWith(${JSON.stringify(PROBES.itemRow.folderAriaLabelSuffix)}),
     };
   }).filter(i => i.id && i.name);
@@ -466,7 +477,7 @@ async function listFolderItems(folderId) {
   const win = getDriveWindow({ show: false });
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
   await sleep(1500);
-  return win.webContents.executeJavaScript(LIST_ITEMS_SCRIPT);
+  return execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
 }
 
 async function listFolderFileNames(folderId) {
@@ -492,16 +503,14 @@ async function createFolder(parentId, name) {
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
   await sleep(1200);
 
-  const newBtn = await win.webContents.executeJavaScript(
-    locateByTextScript(PROBES.newButton.text, '[role=button],button')
-  );
+  const newBtn = await execJS(win, 'locate:newButton',
+    locateByTextScript(PROBES.newButton.text, '[role=button],button'));
   if (!newBtn) throw new Error('could not find the New button — run driveDiagnose and update drive-probes.js');
   await realClickAt(win, newBtn);
   await sleep(1500);
 
-  const item = await win.webContents.executeJavaScript(
-    locateByTextScript(PROBES.menuItemNewFolder.text, '[role=menuitem]')
-  );
+  const item = await execJS(win, 'locate:menuItemNewFolder',
+    locateByTextScript(PROBES.menuItemNewFolder.text, '[role=menuitem]'));
   if (!item) throw new Error('could not find the "New folder" menu item — run driveDiagnose and update drive-probes.js');
   await realClickAt(win, item);
   await sleep(1800);
@@ -576,16 +585,14 @@ async function uploadFiles(folderId, filePaths) {
       await dbg.sendCommand('Page.enable');
       await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
 
-      const newBtn = await win.webContents.executeJavaScript(
-        locateByTextScript(PROBES.newButton.text, '[role=button],button')
-      );
+      const newBtn = await execJS(win, 'locate:newButton',
+        locateByTextScript(PROBES.newButton.text, '[role=button],button'));
       if (!newBtn) throw new Error('could not find the New button — run driveDiagnose and update drive-probes.js');
       await realClickAt(win, newBtn);
       await sleep(1500);
 
-      const item = await win.webContents.executeJavaScript(
-        locateByTextScript(PROBES.menuItemFileUpload.text, '[role=menuitem]')
-      );
+      const item = await execJS(win, 'locate:menuItemFileUpload',
+        locateByTextScript(PROBES.menuItemFileUpload.text, '[role=menuitem]'));
       if (!item) throw new Error('could not find the "File upload" menu item — run driveDiagnose and update drive-probes.js');
       await realClickAt(win, item);
 
