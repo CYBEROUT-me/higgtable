@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
+const driveBrowser = require('./drive-browser');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -319,6 +320,18 @@ ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
 
 ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
 ipcMain.handle('get-log-path', () => logFilePath);
+ipcMain.handle('drive-diagnose', async (_e, folderId) => {
+  try {
+    log(`drive-diagnose: starting${folderId ? ` for folder ${folderId}` : ' (no folder)'}`);
+    const result = await driveBrowser.diagnose(folderId);
+    log(`drive-diagnose: loggedIn=${result.loggedIn}`);
+    return result;
+  } catch (err) {
+    log(`drive-diagnose FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
