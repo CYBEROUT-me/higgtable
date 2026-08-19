@@ -1241,3 +1241,55 @@ Also ask them to confirm the abort paths behave: a task whose code isn't configu
 git add renderer/index.html renderer/app.js main.js preload.js
 git commit -m "Add Upload to Drive button with verification gate before Airtable write"
 ```
+
+---
+
+## As-built notes (2026-08-19)
+
+The plan's Task 4 was written before the DOM was known. What shipped differs
+in several ways, all forced by diagnostic evidence rather than preference.
+
+**Upload mechanism.** There is no `<input type="file">` in Drive's DOM
+(`fileInputs: 0`, confirmed on both empty and populated folders). The plan's
+primary path therefore had nothing to target. What works instead:
+`Page.setInterceptFileChooserDialog` + a **real** mouse click (via
+`sendInputEvent`) on the "File upload" menu item, which yields
+`Page.fileChooserOpened` with a `backendNodeId` and `mode: "selectMultiple"`.
+`DOM.setFileInputFiles` then takes absolute paths — no base64, no size ceiling,
+so `.aep` project files remain deliverable.
+
+**The base64 fallback and `dropTarget` probe were dropped**, not carried as a
+safety net: the chooser route handles every size, so a 50 MB-capped fallback
+would be dead code that merely looked protective.
+
+**Synthetic vs real events.** A synthetic pointer sequence DOES open the New
+menu, but does NOT activate a menu item — only real `sendInputEvent` clicks do.
+Drive's own `c`-then-`u` chord did not work (`viaKeyboard: false`).
+
+**Folder lookup scans the parent listing** rather than the `?q=parent:… title:…`
+search URL, because gridcell rendering in a normal folder view is the only
+form actually verified. Known limitation: if a month folder ever holds enough
+task folders for Drive to virtualise the list, a folder could be missed and a
+duplicate created. Worth testing against a large folder before heavy use.
+
+**Folder detection** parses the type word positionally: strip the item name
+from the front of `aria-label`, then test whether the remainder starts with
+"Folder". `endsWith(' Folder')` fails when Drive appends
+"More info (Option + ...)"; `contains(' Folder')` wrongly matches a file named
+"My Folder.png".
+
+**Navigation.** `loadURL()`'s returned promise is awaited directly; the original
+`did-stop-loading` listener was racy (attached after the load began) and hung
+indefinitely when reloading the current URL. Reloads are skipped when already
+on the target folder, and callers needing fresh content pass `{ force: true }`.
+All three listing reads poll the DOM in place rather than re-navigating —
+re-navigating mid-poll aborted in-flight loads with `ERR_FAILED`.
+
+**Concurrency and visibility.** Only one delivery may run at a time (they share
+one BrowserWindow), there is a 5-minute watchdog, and every step logs to
+`higgtable.log` with a `[drive]` prefix.
+
+**Cost of the discovery loop:** each failed dry run created a folder before
+failing at read-back, leaving duplicate `08_August` folders behind. Contained
+to a scratch folder because testing was deliberately kept out of client
+folders — that precaution earned its keep.
