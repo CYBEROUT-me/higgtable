@@ -17,6 +17,16 @@ const DRIVE_ROOT = 'https://drive.google.com/drive/my-drive';
 
 let driveWin = null;
 
+// Progress logging. main.js injects its logger so each step lands in
+// higgtable.log — without this a slow run is indistinguishable from a hung one.
+let logFn = () => {};
+function setLogger(fn) { logFn = typeof fn === 'function' ? fn : () => {}; }
+
+// Only one Drive operation may run at a time: they all drive the SAME
+// BrowserWindow, so a second concurrent call navigates out from under the
+// first and both fail in confusing ways.
+let inFlight = null;
+
 function getDriveWindow({ show = false } = {}) {
   if (driveWin && !driveWin.isDestroyed()) {
     if (show) driveWin.show();
@@ -473,6 +483,7 @@ const LIST_ITEMS_SCRIPT = `(() => {
 })()`;
 
 async function listFolderItems(folderId) {
+  logFn(`listFolderItems: ${folderId}`);
   await navigateToFolder(folderId);
   const win = getDriveWindow({ show: false });
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
@@ -496,6 +507,7 @@ async function findChildFoldersByName(parentId, name) {
 // Creates a folder via New -> New folder -> type -> Create. Returns nothing
 // useful on its own; findOrCreateFolder reads the id back from a fresh listing.
 async function createFolder(parentId, name) {
+  logFn(`createFolder: "${name}" in ${parentId}`);
   await navigateToFolder(parentId);
   const win = getDriveWindow({ show: true });
   win.focus();
@@ -618,13 +630,23 @@ async function uploadFiles(folderId, filePaths) {
 
 // Resolves the destination, uploads, and verifies. NEVER writes to Airtable —
 // the caller decides that, and only when `missing` is empty.
-async function deliver({ appFolderId, monthName, taskName, filePaths }) {
+async function deliver(args) {
+  if (inFlight) {
+    throw new Error('a Drive upload is already running — wait for it to finish before starting another');
+  }
+  inFlight = doDeliver(args).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function doDeliver({ appFolderId, monthName, taskName, filePaths }) {
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!monthName || !taskName) throw new Error('missing month or task folder name');
   if (!Array.isArray(filePaths) || !filePaths.length) throw new Error('no files to upload');
 
+  logFn(`deliver: start ${monthName}/${taskName}, ${filePaths.length} file(s)`);
   const login = await ensureLoggedIn();
   if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
+  logFn('deliver: signed in');
 
   // The <App>_creatives folder must already exist; a typo-created sibling would
   // silently split a client's deliverables, so never create at this level.
@@ -637,32 +659,41 @@ async function deliver({ appFolderId, monthName, taskName, filePaths }) {
   if (!pre.ok) {
     throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}. Run driveDiagnose and update drive-probes.js`);
   }
+  logFn('deliver: preflight ok');
 
   const warnings = [];
   const monthId = await findOrCreateFolder(appFolderId, monthName);
+  logFn(`deliver: month folder ${monthName} -> ${monthId}`);
   const taskId = await findOrCreateFolder(monthId, taskName);
+  logFn(`deliver: task folder ${taskName} -> ${taskId}`);
 
   const existing = await listFolderFileNames(taskId);
-  const clashes = filePaths.map(p => path.basename(p)).filter(n => existing.includes(n));
+  const expected = filePaths.map(p => path.basename(p));
+  const clashes = expected.filter(n => existing.includes(n));
   if (clashes.length) {
     warnings.push(`Drive already has these files and will create duplicates rather than replace them: ${clashes.join(', ')}`);
   }
 
-  await uploadFiles(taskId, filePaths);
+  const up = await uploadFiles(taskId, filePaths);
+  logFn(`deliver: upload triggered via ${up.strategy}`);
 
-  // Verification gate: reload fresh and confirm every expected name arrived.
-  // Uploads are async, so poll rather than checking once.
-  const expected = filePaths.map(p => path.basename(p));
+  // Verification gate. The upload happens in the folder view we're already on
+  // and Drive updates that listing in place, so re-read the CURRENT page rather
+  // than re-navigating on every poll (which made this take minutes).
+  const win = getDriveWindow({ show: false });
   let missing = expected.slice();
-  const deadline = Date.now() + 120000;
+  const deadline = Date.now() + 90000;
   while (missing.length && Date.now() < deadline) {
-    await sleep(4000);
-    const present = await listFolderFileNames(taskId);
+    await sleep(3000);
+    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    const present = items.filter(i => !i.isFolder).map(i => i.name);
     missing = expected.filter(n => !present.includes(n));
+    if (missing.length) logFn(`deliver: waiting on ${missing.length} file(s)`);
   }
+  logFn(`deliver: verification done, missing=${JSON.stringify(missing)}`);
 
   const nav = await navigateToFolder(taskId);
-  getDriveWindow({ show: false }).hide();
+  win.hide();
   return { folderUrl: nav.url, folderId: taskId, missing, warnings };
 }
 
@@ -674,6 +705,7 @@ module.exports = {
   navigateToFolder,
   diagnose,
   withDebugger,
+  setLogger,
   preflight,
   listFolderItems,
   listFolderFileNames,

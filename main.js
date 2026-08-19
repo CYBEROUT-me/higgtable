@@ -20,6 +20,9 @@ function log(msg) {
   try { fs.appendFileSync(logFilePath, line + '\n'); } catch {}
 }
 
+// Let the Drive automation write step-by-step progress to the same log.
+driveBrowser.setLogger(msg => log(`[drive] ${msg}`));
+
 // ── Settings ───────────────────────────────────────────────────────────
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
