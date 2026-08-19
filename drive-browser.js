@@ -251,44 +251,90 @@ async function diagnose(folderId, opts = {}) {
 
   let uploadProbe = null;
   if (opts.probeUpload) {
+    // Show and focus the window: keyboard input needs focus, and it lets the
+    // user watch what the automation is doing.
+    win.show();
+    win.focus();
+    win.webContents.focus();
+    await sleep(600);
+
     uploadProbe = await withDebugger(win, async (dbg) => {
-      const events = [];
+      const seenEvents = [];
+      let chooser = null;
       const onMessage = (_e, method, params) => {
-        if (method === 'Page.fileChooserOpened') events.push({ method, params });
+        seenEvents.push(method);
+        if (method === 'Page.fileChooserOpened') chooser = params;
       };
       dbg.on('message', onMessage);
+
+      const pressKey = (keyCode) => {
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode });
+        win.webContents.sendInputEvent({ type: 'char', keyCode });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode });
+      };
+
       try {
         await dbg.sendCommand('Page.enable');
         await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
 
-        const newCandidates = await win.webContents.executeJavaScript(describeCandidatesScript('New'));
-        const clickedNew = await win.webContents.executeJavaScript(clickByTextScript('New'));
-        await sleep(1800);
-        const menu = await win.webContents.executeJavaScript(DUMP_MENU_SCRIPT);
+        // ATTEMPT 1 — Drive's own chord shortcut ("File upload: c then u"),
+        // sent as real input events through Chromium rather than synthetic
+        // DOM events, which the menu item ignored.
+        await win.webContents.executeJavaScript(
+          'document.activeElement && document.activeElement.blur(), document.body.click(), true'
+        ).catch(() => {});
+        await sleep(400);
+        pressKey('c');
+        await sleep(250);
+        pressKey('u');
+        await sleep(3000);
+        const viaKeyboard = !!chooser;
 
-        // Drive labels this differently across versions; try each in turn.
-        let clickedUpload = null;
-        for (const label of ['File upload', 'Upload files', 'Upload file']) {
-          clickedUpload = await win.webContents.executeJavaScript(clickByTextScript(label));
-          if (clickedUpload && clickedUpload.clicked) { clickedUpload.matchedLabel = label; break; }
+        // ATTEMPT 2 — open the New menu, then click "File upload" with a REAL
+        // mouse event at its coordinates (not a synthetic DOM click).
+        let viaMouse = false;
+        let mouseTarget = null;
+        if (!chooser) {
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+          await sleep(500);
+          await win.webContents.executeJavaScript(clickByTextScript('New'));
+          await sleep(1500);
+          mouseTarget = await win.webContents.executeJavaScript(`(() => {
+            const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+            const it = [...document.querySelectorAll('[role=menuitem]')].find(e => {
+              const r = e.getBoundingClientRect();
+              return e.offsetParent !== null && r.width > 0 && norm(e.innerText).startsWith('File upload');
+            });
+            if (!it) return null;
+            const r = it.getBoundingClientRect();
+            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+                     text: norm(it.innerText).slice(0, 30) };
+          })()`);
+          if (mouseTarget) {
+            win.webContents.sendInputEvent({ type: 'mouseMove', x: mouseTarget.x, y: mouseTarget.y });
+            await sleep(150);
+            win.webContents.sendInputEvent({ type: 'mouseDown', x: mouseTarget.x, y: mouseTarget.y, button: 'left', clickCount: 1 });
+            win.webContents.sendInputEvent({ type: 'mouseUp', x: mouseTarget.x, y: mouseTarget.y, button: 'left', clickCount: 1 });
+            await sleep(3000);
+            viaMouse = !!chooser && !viaKeyboard;
+          }
         }
-        await sleep(2500);
 
         return {
-          newCandidates,
-          clickedNew,
-          menuItems: menu,
-          clickedUpload,
-          fileChooserIntercepted: events.length > 0,
-          fileChooserEvent: events[0] ? events[0].params : null,
+          viaKeyboard,
+          viaMouse,
+          mouseTarget,
+          fileChooserIntercepted: !!chooser,
+          fileChooserEvent: chooser,
+          cdpEventsSeen: [...new Set(seenEvents)].slice(0, 25),
         };
       } finally {
         dbg.removeListener('message', onMessage);
         try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
-        // Close any menu/dialog left open so the page is clean for the next run.
-        await win.webContents.executeJavaScript(
-          'document.body.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true})), true'
-        ).catch(() => {});
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+        win.hide();
       }
     });
   }
