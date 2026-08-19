@@ -101,25 +101,75 @@ async function withDebugger(win, fn) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Clicks the first [role=button]/button whose trimmed text equals `label`.
-// Uses element.click() in page context rather than coordinates, so it works
-// regardless of layout.
+// Clicks a control by visible text or aria-label. Two things the naive version
+// got wrong: there are several buttons reading "New" (some hidden), so this
+// filters to visible elements; and Google's UI reacts to pointer/mouse events
+// rather than a bare element.click(), so this dispatches the full sequence.
 function clickByTextScript(label) {
-  return '(() => {' +
-    'const els = [...document.querySelectorAll("[role=button],button,[role=menuitem]")];' +
-    'const hit = els.find(e => (e.innerText || "").trim() === ' + JSON.stringify(label) + ') ||' +
-    '            els.find(e => (e.innerText || "").trim().startsWith(' + JSON.stringify(label) + '));' +
-    'if (!hit) return null;' +
-    'hit.click();' +
-    'return { tag: hit.tagName, text: (hit.innerText || "").trim().slice(0, 40) };' +
-  '})()';
+  return `(() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const want = ${JSON.stringify(label)};
+    const all = [...document.querySelectorAll('[role=button],button,[role=menuitem],[role=option]')];
+    const visible = all.filter(e => {
+      const r = e.getBoundingClientRect();
+      return e.offsetParent !== null && r.width > 0 && r.height > 0;
+    });
+    const pick = visible.find(e => norm(e.innerText) === want)
+              || visible.find(e => norm(e.getAttribute('aria-label')) === want)
+              || visible.find(e => norm(e.innerText).startsWith(want))
+              || visible.find(e => norm(e.getAttribute('aria-label')).startsWith(want));
+    if (!pick) {
+      return { clicked: false, visibleCandidates: visible.length,
+               sample: visible.slice(0, 12).map(e => norm(e.innerText).slice(0, 30) || norm(e.getAttribute('aria-label')).slice(0, 30)) };
+    }
+    const r = pick.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, composed: true,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    pick.dispatchEvent(new PointerEvent('pointerdown', o));
+    pick.dispatchEvent(new MouseEvent('mousedown', o));
+    pick.dispatchEvent(new PointerEvent('pointerup', o));
+    pick.dispatchEvent(new MouseEvent('mouseup', o));
+    pick.dispatchEvent(new MouseEvent('click', o));
+    return { clicked: true, tag: pick.tagName,
+             text: norm(pick.innerText).slice(0, 40),
+             ariaLabel: norm(pick.getAttribute('aria-label')).slice(0, 40) };
+  })()`;
 }
 
-// Dumps whatever menu/dialog is currently open, so we can learn its item names.
-const DUMP_MENU_SCRIPT = '(() => {' +
-  'const items = [...document.querySelectorAll("[role=menuitem],[role=menu] [role=button]")];' +
-  'return items.slice(0, 20).map(e => ({ text: (e.innerText || "").trim().slice(0, 40), role: e.getAttribute("role") }));' +
-'})()';
+// Dumps only VISIBLE menu items. The first attempt dumped every [role=menuitem]
+// in the DOM and picked up a hidden Help menu, which looked like the New menu
+// had opened when it hadn't.
+const DUMP_MENU_SCRIPT = `(() => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const items = [...document.querySelectorAll('[role=menuitem],[role=option]')].filter(e => {
+    const r = e.getBoundingClientRect();
+    return e.offsetParent !== null && r.width > 0 && r.height > 0;
+  });
+  return items.slice(0, 25).map(e => ({
+    text: norm(e.innerText).slice(0, 40),
+    aria: norm(e.getAttribute('aria-label')).slice(0, 40),
+    role: e.getAttribute('role'),
+  }));
+})()`;
+
+// Lists every control matching a label, with visibility, so we can tell which
+// of the duplicate "New" buttons is the real one.
+function describeCandidatesScript(label) {
+  return `(() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const want = ${JSON.stringify(label)};
+    return [...document.querySelectorAll('[role=button],button')]
+      .filter(e => norm(e.innerText).startsWith(want) || norm(e.getAttribute('aria-label')).startsWith(want))
+      .slice(0, 8)
+      .map(e => {
+        const r = e.getBoundingClientRect();
+        return { tag: e.tagName, text: norm(e.innerText).slice(0, 30),
+                 aria: norm(e.getAttribute('aria-label')).slice(0, 30),
+                 visible: e.offsetParent !== null && r.width > 0 && r.height > 0,
+                 w: Math.round(r.width), h: Math.round(r.height) };
+      });
+  })()`;
+}
 
 // Samples the several ways Drive might expose a child item's identity. The
 // first diagnostic only looked at [data-id] and found nothing usable, so this
@@ -211,14 +261,21 @@ async function diagnose(folderId, opts = {}) {
         await dbg.sendCommand('Page.enable');
         await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
 
+        const newCandidates = await win.webContents.executeJavaScript(describeCandidatesScript('New'));
         const clickedNew = await win.webContents.executeJavaScript(clickByTextScript('New'));
-        await sleep(1500);
+        await sleep(1800);
         const menu = await win.webContents.executeJavaScript(DUMP_MENU_SCRIPT);
 
-        const clickedUpload = await win.webContents.executeJavaScript(clickByTextScript('File upload'));
-        await sleep(2000);
+        // Drive labels this differently across versions; try each in turn.
+        let clickedUpload = null;
+        for (const label of ['File upload', 'Upload files', 'Upload file']) {
+          clickedUpload = await win.webContents.executeJavaScript(clickByTextScript(label));
+          if (clickedUpload && clickedUpload.clicked) { clickedUpload.matchedLabel = label; break; }
+        }
+        await sleep(2500);
 
         return {
+          newCandidates,
           clickedNew,
           menuItems: menu,
           clickedUpload,
