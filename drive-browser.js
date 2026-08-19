@@ -83,18 +83,35 @@ async function waitForSelector(win, selector, timeoutMs = 20000) {
 // to UI changes.
 async function ensureLoggedIn() {
   const win = getDriveWindow({ show: false });
-  win.loadURL(DRIVE_ROOT);
-  await waitForLoad(win);
+  await loadAndWait(win, DRIVE_ROOT);
   const url = win.webContents.getURL();
   const loggedIn = url.startsWith('https://drive.google.com/');
   if (!loggedIn) win.show(); // surface the real Google login page for the user
   return { loggedIn, url };
 }
 
+// loadURL() already returns a promise that settles when the navigation
+// completes. The old code fired loadURL and THEN attached a did-stop-loading
+// listener, so a load that finished in between was missed and the wait hung
+// forever — which is exactly what happened when re-loading the current URL.
+async function loadAndWait(win, url) {
+  try {
+    await win.webContents.loadURL(url);
+  } catch (err) {
+    // ERR_ABORTED is normal when a navigation is superseded or same-document.
+    if (!String(err && err.message).includes('ERR_ABORTED')) throw err;
+  }
+}
+
 async function navigateToFolder(folderId) {
   const win = getDriveWindow({ show: false });
-  win.loadURL(`https://drive.google.com/drive/folders/${folderId}`);
-  await waitForLoad(win);
+  const current = win.webContents.getURL();
+  // Already there and idle: skip the reload entirely. Saves several seconds
+  // per lookup and avoids re-rendering a listing we can already read.
+  if (current.includes(`/folders/${folderId}`) && !win.webContents.isLoading()) {
+    return { url: current, folderId };
+  }
+  await loadAndWait(win, `https://drive.google.com/drive/folders/${folderId}`);
   const url = win.webContents.getURL();
   const m = url.match(/\/folders\/([A-Za-z0-9_-]+)/);
   return { url, folderId: m ? m[1] : null };
@@ -634,7 +651,9 @@ async function deliver(args) {
   if (inFlight) {
     throw new Error('a Drive upload is already running — wait for it to finish before starting another');
   }
-  inFlight = doDeliver(args).finally(() => { inFlight = null; });
+  const watchdog = new Promise((_r, reject) =>
+    setTimeout(() => reject(new Error('Drive upload timed out after 5 minutes — check higgtable.log for the last [drive] step reached')), 300000));
+  inFlight = Promise.race([doDeliver(args), watchdog]).finally(() => { inFlight = null; });
   return inFlight;
 }
 
