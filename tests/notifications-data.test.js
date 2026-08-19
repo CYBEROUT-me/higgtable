@@ -3,6 +3,7 @@ const {
   MAX_NOTIFICATIONS,
   recordToNotification,
   computeDeadlineUrgency,
+  resolveNotificationBadges,
   diffMissedRecords,
   appendNotification,
   appendNotificationBatch,
@@ -112,4 +113,81 @@ test('computeDeadlineUrgency returns "normal" for a date further out', () => {
 test('computeDeadlineUrgency returns null when there is no deadline', () => {
   expect(computeDeadlineUrgency(null, '2026-07-31')).toBeNull();
   expect(computeDeadlineUrgency('', '2026-07-31')).toBeNull();
+});
+
+const liveRec = (fields) => ({ id: 'rec1', fields });
+const snapshot = (over = {}) => ({
+  id: 'CMC Creatives:rec1:1000', recordId: 'rec1', tableName: 'CMC Creatives',
+  taskName: 'Task', timestamp: 1000, read: false,
+  priority: 'Low', deadline: '2026-12-31', ...over,
+});
+
+test('resolveNotificationBadges prefers the live record over a stale snapshot', () => {
+  const r = resolveNotificationBadges(
+    snapshot({ priority: 'Low', deadline: '2026-12-31' }),
+    liveRec({ Priority: 'High', Deadline: '2026-08-19', Status: 'In work' }),
+    '2026-08-19'
+  );
+  expect(r.priority).toBe('High');
+  expect(r.deadline).toBe('2026-08-19');
+  expect(r.urgency).toBe('today');
+  expect(r.isUrgent).toBe(true);
+});
+
+test('resolveNotificationBadges uses record-level fallback: a cleared live field is null, not the snapshot value', () => {
+  const r = resolveNotificationBadges(
+    snapshot({ priority: 'High', deadline: '2026-08-01' }),
+    liveRec({ Status: 'In work' }),
+    '2026-08-19'
+  );
+  expect(r.priority).toBeNull();
+  expect(r.deadline).toBeNull();
+  expect(r.urgency).toBeNull();
+  expect(r.isUrgent).toBe(false);
+});
+
+test('resolveNotificationBadges suppresses urgency for a completed task even when overdue and High', () => {
+  for (const status of ['Done', 'To accept']) {
+    const r = resolveNotificationBadges(
+      snapshot(),
+      liveRec({ Priority: 'High', Deadline: '2026-08-01', Status: status }),
+      '2026-08-19'
+    );
+    expect(r.priority).toBe('High');
+    expect(r.deadline).toBe('2026-08-01');
+    expect(r.urgency).toBeNull();
+    expect(r.isUrgent).toBe(false);
+  }
+});
+
+test('resolveNotificationBadges falls back to the snapshot with urgency when the record is absent', () => {
+  const r = resolveNotificationBadges(
+    snapshot({ priority: 'Medium', deadline: '2026-08-01' }),
+    null,
+    '2026-08-19'
+  );
+  expect(r.priority).toBe('Medium');
+  expect(r.deadline).toBe('2026-08-01');
+  expect(r.urgency).toBe('overdue');
+  expect(r.isUrgent).toBe(true);
+});
+
+test('resolveNotificationBadges marks High priority urgent without an overdue deadline', () => {
+  const r = resolveNotificationBadges(
+    snapshot(),
+    liveRec({ Priority: 'High', Deadline: '2026-12-31', Status: 'In work' }),
+    '2026-08-19'
+  );
+  expect(r.urgency).toBe('normal');
+  expect(r.isUrgent).toBe(true);
+});
+
+test('resolveNotificationBadges leaves a distant deadline non-urgent', () => {
+  const r = resolveNotificationBadges(
+    snapshot(),
+    liveRec({ Priority: 'Low', Deadline: '2026-12-31', Status: 'In work' }),
+    '2026-08-19'
+  );
+  expect(r.urgency).toBe('normal');
+  expect(r.isUrgent).toBe(false);
 });

@@ -44,6 +44,34 @@ function computeDeadlineUrgency(deadline, today) {
   return 'normal';
 }
 
+// A task in one of these statuses is finished, so it is never "urgent"
+// regardless of its deadline — same completed-status pair the dashboard
+// already treats as done work.
+const COMPLETED_STATUSES = ['Done', 'To accept'];
+
+// Decides what badges one notification should display. `rec` is the live
+// Airtable record from recordsCache, or falsy when it isn't available (table
+// still preloading, or the record was deleted).
+//
+// Live record found -> use its current Priority/Deadline, and suppress
+// urgency when its Status is completed. Record-level fallback: if the record
+// is present but a field was cleared, that field is null — it does NOT fall
+// back to the snapshot, since the snapshot means "couldn't ask", not
+// "didn't like the answer".
+//
+// Record absent -> fall back to the notification's stored snapshot, urgency
+// included: a missing record is usually just a table that hasn't finished
+// preloading, and hiding a real alert is worse than briefly showing a stale
+// one.
+function resolveNotificationBadges(n, rec, today) {
+  const priority = rec ? (rec.fields['Priority'] || null) : (n.priority || null);
+  const deadline = rec ? (rec.fields['Deadline'] || null) : (n.deadline || null);
+  const completed = !!rec && COMPLETED_STATUSES.includes(rec.fields['Status'] || '');
+  const urgency = completed ? null : computeDeadlineUrgency(deadline, today);
+  const isUrgent = !completed && (priority === 'High' || urgency === 'overdue');
+  return { priority, deadline, urgency, isUrgent };
+}
+
 // Given the record IDs persisted from the last session and the current
 // fresh record list for one table, returns the records that are new since
 // then — filtered to the same `des` a live poll already uses. `des`
@@ -77,8 +105,10 @@ function markAllRead(list) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAX_NOTIFICATIONS,
+    COMPLETED_STATUSES,
     recordToNotification,
     computeDeadlineUrgency,
+    resolveNotificationBadges,
     diffMissedRecords,
     appendNotification,
     appendNotificationBatch,
