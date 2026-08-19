@@ -1587,6 +1587,88 @@ function renderFileList() {
 
 const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 
+
+// Uploads the task's local folder to Drive, then writes the Drive folder link
+// into Creative Link — but only if every file was verified present. A wrong
+// link is worse than none: it would look like a delivery that never happened.
+async function uploadTaskToDrive() {
+  const rec = state.selectedTask;
+  if (!rec) { alert('Select a task first.'); return; }
+  const taskName = rec.fields['Name'] || '';
+
+  const code = appCodeFromTaskName(taskName);
+  const appFolderId = resolveAppFolderId(code, state.driveAppFolders);
+  if (!appFolderId) {
+    alert(`No Drive folder is configured for app code "${code || '(none)'}".\n\nAdd it in Settings → Drive Delivery Folders. Nothing was uploaded.`);
+    return;
+  }
+
+  const dirs = [...new Set(state.pendingFiles.map(f => f.path.substring(0, f.path.lastIndexOf('/'))))];
+  if (dirs.length !== 1) {
+    alert('Rename the files first — the task folder was not found.');
+    return;
+  }
+  const sourceDir = dirs[0];
+
+  // SAFETY: only ever upload from the per-task folder performRename() created.
+  // Before renaming, these paths point at the raw working directory (e.g. the
+  // After Effects folder) — uploading that would dump hundreds of unrelated
+  // files into a client's Drive. The folder name must equal the task Name.
+  if (sourceDir.split('/').pop() !== taskName) {
+    alert(`Not uploading: "${sourceDir}" is not this task's folder.\n\nClick "Rename Files" first — that gathers the files into a folder named after the task. Nothing was uploaded.`);
+    return;
+  }
+
+  const allFiles = await window.app.findAssetFilesInFolder(sourceDir);
+  if (!allFiles.length) { alert(`No files found in ${sourceDir}`); return; }
+
+  // Project/source files ship only when the setting is on. Excluded files are
+  // always listed below so it is never ambiguous what did and didn't go.
+  const { include: filePaths, excluded } = partitionUploadFiles(allFiles, state.driveIncludeProjectFiles);
+  if (!filePaths.length) {
+    alert(`Nothing to upload — all ${allFiles.length} file(s) are project files, and "Also upload project/source files" is off in Settings.`);
+    return;
+  }
+
+  const monthName = monthFolderName(toISO(new Date()));
+  const destination = `${DRIVE_APP_LABELS[code] || code} / ${monthName} / ${taskName}`;
+  const skipNote = excluded.length
+    ? `\n\nNOT uploading ${excluded.length} project file(s):\n${excluded.map(p => p.split('/').pop()).join('\n')}`
+    : '';
+  if (!confirm(`Upload ${filePaths.length} file(s) to Drive?\n\n${destination}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}${skipNote}`)) {
+    return;
+  }
+
+  const btn = document.getElementById('drive-upload-btn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+  try {
+    const result = await window.app.driveUpload({ appFolderId, monthName, taskName, filePaths });
+    if (result.error) {
+      alert(`Upload failed — nothing written to Airtable.\n\n${result.error}`);
+      return;
+    }
+    if (result.missing && result.missing.length) {
+      alert(`Upload could not be verified — nothing written to Airtable.\n\nMissing in Drive:\n${result.missing.join('\n')}`);
+      return;
+    }
+    // Verified: safe to record the link. updateRecordField() needs a DOM input
+    // to flash status against, so write through the Airtable bridge directly.
+    await window.airtable.updateRecord(state.baseId, state.tables[state.activeTable].id, rec.id, {
+      'Creative Link': result.folderUrl,
+    });
+    rec.fields['Creative Link'] = result.folderUrl;
+    log(`uploadTaskToDrive: ${filePaths.length} file(s) delivered, Creative Link -> ${result.folderUrl}`);
+    const warn = result.warnings && result.warnings.length ? `\n\nWarnings:\n${result.warnings.join('\n')}` : '';
+    alert(`Delivered ${filePaths.length} file(s) and set Creative Link.${warn}`);
+  } catch (err) {
+    alert(`Upload failed — nothing written to Airtable.\n\n${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upload to Drive';
+  }
+}
+
 async function performRename() {
   const fullTaskName = state.selectedTask ? (state.selectedTask.fields['Name'] || '') : '';
   const taskName = stripAspectRatio(fullTaskName);
@@ -2077,6 +2159,7 @@ document.getElementById('clear-files-btn').addEventListener('click', () => {
   renderFileList();
 });
 document.getElementById('rename-btn').addEventListener('click', performRename);
+document.getElementById('drive-upload-btn').addEventListener('click', uploadTaskToDrive);
 
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
