@@ -536,28 +536,28 @@ function renderNotificationDropdown() {
   const today = toISO(new Date());
   const DEADLINE_LABELS = { overdue: 'Overdue', today: 'Due today', tomorrow: 'Due tomorrow' };
   notifications.forEach(n => {
-    const urgency = computeDeadlineUrgency(n.deadline, today);
-    const isUrgentRow = n.priority === 'High' || urgency === 'overdue';
+    const liveRec = (recordsCache[n.tableName] || []).find(r => r.id === n.recordId);
+    const { priority, urgency, isUrgent } = resolveNotificationBadges(n, liveRec, today);
     const btn = document.createElement('button');
-    btn.className = `notify-item${n.read ? ' read' : ''}${isUrgentRow ? ' urgent' : ''}`;
+    btn.className = `notify-item${n.read ? ' read' : ''}${isUrgent ? ' urgent' : ''}`;
     const shortTable = n.tableName.replace(' Creatives', '');
     const timeSpan = document.createElement('span');
     timeSpan.className = 'notify-item-time';
     timeSpan.textContent = new Date(n.timestamp).toLocaleString();
     btn.appendChild(timeSpan);
     btn.appendChild(document.createTextNode(n.taskName));
-    if (n.priority) {
+    if (priority) {
       const priorityPill = document.createElement('span');
       priorityPill.className = 'select-pill';
-      priorityPill.textContent = n.priority;
-      const swatch = singleSelectSwatch(n.tableName, 'Priority', n.priority);
+      priorityPill.textContent = priority;
+      const swatch = singleSelectSwatch(n.tableName, 'Priority', priority);
       if (swatch) { priorityPill.style.background = swatch.bg; priorityPill.style.color = swatch.text; }
       btn.appendChild(priorityPill);
     }
-    if (n.deadline) {
+    if (DEADLINE_LABELS[urgency]) {
       const deadlineSpan = document.createElement('span');
-      deadlineSpan.className = `notify-deadline${urgency !== 'normal' ? ` ${urgency}` : ''}`;
-      deadlineSpan.textContent = DEADLINE_LABELS[urgency] || n.deadline;
+      deadlineSpan.className = `notify-deadline ${urgency}`;
+      deadlineSpan.textContent = DEADLINE_LABELS[urgency];
       btn.appendChild(deadlineSpan);
     }
     const tableSpan = document.createElement('span');
