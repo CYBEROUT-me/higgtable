@@ -32,4 +32,6 @@ contextBridge.exposeInMainWorld('app', {
   getLogPath:        ()            => ipcRenderer.invoke('get-log-path'),
   openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
   driveDiagnose:     (folderId, o) => ipcRenderer.invoke('drive-diagnose', folderId, o),
+  driveUpload:       (payload)     => ipcRenderer.invoke('drive-upload', payload),
+  findAssetFilesInFolder: (dir)    => ipcRenderer.invoke('find-asset-files-in-folder', dir),
 });

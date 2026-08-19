@@ -332,6 +332,25 @@ ipcMain.handle('drive-diagnose', async (_e, folderId, opts) => {
   }
 });
 
+ipcMain.handle('drive-upload', async (_e, payload) => {
+  try {
+    log(`drive-upload: ${payload && payload.taskName} -> ${(payload && payload.filePaths || []).length} file(s)`);
+    const result = await driveBrowser.deliver(payload);
+    log(`drive-upload: done, missing=${JSON.stringify(result.missing)}`);
+    return result;
+  } catch (err) {
+    log(`drive-upload FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('find-asset-files-in-folder', (_e, dir) => {
+  return fs.readdirSync(dir)
+    .filter(n => !n.startsWith('.'))
+    .map(n => path.join(dir, n))
+    .filter(p => fs.statSync(p).isFile());
+});
+
 ipcMain.handle('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });

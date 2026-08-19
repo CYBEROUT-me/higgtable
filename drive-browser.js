@@ -8,6 +8,9 @@
 // reads, stores, types, or transmits credentials.
 
 const { BrowserWindow } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const { PROBES, PREFLIGHT_PROBES } = require('./drive-probes');
 
 const PARTITION = 'persist:gdrive';
 const DRIVE_ROOT = 'https://drive.google.com/drive/my-drive';
@@ -394,6 +397,268 @@ async function diagnose(folderId, opts = {}) {
   return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe, newFolderProbe };
 }
 
+
+// ── Operations ──────────────────────────────────────────────────────────
+// Interaction rules learned from the 2026-08-19 diagnostics:
+//   * A synthetic pointer sequence DOES open the New menu.
+//   * A synthetic click does NOT activate a menu item — only real
+//     sendInputEvent mouse events at the element's coordinates do.
+//   * There is no <input type=file> in the DOM; uploads work by intercepting
+//     the file chooser and handing Chromium file PATHS (no size limit).
+
+// Real mouse click through Chromium's input pipeline, at an element's centre.
+async function realClickAt(win, point) {
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+  await sleep(120);
+  win.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+  win.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+}
+
+// Centre coordinates of the first VISIBLE element matching a probe's text.
+function locateByTextScript(text, selector) {
+  return `(() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => {
+      const r = e.getBoundingClientRect();
+      return e.offsetParent !== null && r.width > 0 && r.height > 0 &&
+             norm(e.innerText).startsWith(${JSON.stringify(text)});
+    });
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`;
+}
+
+// Verifies the probes that must exist on a loaded folder page, BEFORE any file
+// is uploaded. Turns "the automation broke and silently delivered nothing" into
+// "the automation broke and named the probe".
+async function preflight() {
+  const win = getDriveWindow({ show: false });
+  const failures = [];
+  for (const key of PREFLIGHT_PROBES) {
+    const ok = await win.webContents.executeJavaScript(
+      `!!document.querySelector(${JSON.stringify(PROBES[key].selector)})`
+    ).catch(() => false);
+    if (!ok) failures.push(key);
+  }
+  const newBtn = await win.webContents.executeJavaScript(
+    locateByTextScript(PROBES.newButton.text, '[role=button],button')
+  );
+  if (!newBtn) failures.push('newButton');
+  return { ok: failures.length === 0, failures };
+}
+
+// Lists the children of the currently-open folder view.
+const LIST_ITEMS_SCRIPT = `(() => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  return [...document.querySelectorAll(${JSON.stringify(PROBES.itemRow.selector)})].map(el => {
+    const aria = el.getAttribute('aria-label') || '';
+    return {
+      id: el.getAttribute(${JSON.stringify(PROBES.itemRow.idAttribute)}),
+      name: (el.innerText || '').split('\n')[0].trim(),
+      isFolder: aria.endsWith(${JSON.stringify(PROBES.itemRow.folderAriaLabelSuffix)}),
+    };
+  }).filter(i => i.id && i.name);
+})()`;
+
+async function listFolderItems(folderId) {
+  await navigateToFolder(folderId);
+  const win = getDriveWindow({ show: false });
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+  await sleep(1500);
+  return win.webContents.executeJavaScript(LIST_ITEMS_SCRIPT);
+}
+
+async function listFolderFileNames(folderId) {
+  const items = await listFolderItems(folderId);
+  return items.filter(i => !i.isFolder).map(i => i.name);
+}
+
+// Finds direct child folders by EXACT name. Returns EVERY match so the caller
+// can abort on duplicates instead of creating yet another one. Exact match
+// only: a prefix match would conflate "08_August" with "08_August_old".
+async function findChildFoldersByName(parentId, name) {
+  const items = await listFolderItems(parentId);
+  return items.filter(i => i.isFolder && i.name === name).map(i => i.id);
+}
+
+// Creates a folder via New -> New folder -> type -> Create. Returns nothing
+// useful on its own; findOrCreateFolder reads the id back from a fresh listing.
+async function createFolder(parentId, name) {
+  await navigateToFolder(parentId);
+  const win = getDriveWindow({ show: true });
+  win.focus();
+  win.webContents.focus();
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+  await sleep(1200);
+
+  const newBtn = await win.webContents.executeJavaScript(
+    locateByTextScript(PROBES.newButton.text, '[role=button],button')
+  );
+  if (!newBtn) throw new Error('could not find the New button — run driveDiagnose and update drive-probes.js');
+  await realClickAt(win, newBtn);
+  await sleep(1500);
+
+  const item = await win.webContents.executeJavaScript(
+    locateByTextScript(PROBES.menuItemNewFolder.text, '[role=menuitem]')
+  );
+  if (!item) throw new Error('could not find the "New folder" menu item — run driveDiagnose and update drive-probes.js');
+  await realClickAt(win, item);
+  await sleep(1800);
+
+  const hasInput = await waitForSelector(win, PROBES.folderNameInput.selector, 10000);
+  if (!hasInput) throw new Error('New folder dialog did not appear — run driveDiagnose and update drive-probes.js');
+
+  // The field is pre-filled with "Untitled folder": focus, select all, then
+  // type real characters so the framework registers the change.
+  await win.webContents.executeJavaScript(
+    `(() => { const i = document.querySelector(${JSON.stringify(PROBES.folderNameInput.selector)}); i.focus(); i.select(); return true; })()`
+  );
+  await sleep(200);
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['cmd'] });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'a', modifiers: ['cmd'] });
+  await sleep(150);
+  for (const ch of name) {
+    win.webContents.sendInputEvent({ type: 'char', keyCode: ch });
+  }
+  await sleep(400);
+
+  const typed = await win.webContents.executeJavaScript(
+    `(() => { const i = document.querySelector(${JSON.stringify(PROBES.folderNameInput.selector)}); return i ? i.value : null; })()`
+  );
+  if (typed !== name) {
+    throw new Error(`folder name field reads "${typed}" but should be "${name}" — refusing to create a wrongly-named folder`);
+  }
+
+  const createBtn = await win.webContents.executeJavaScript(
+    locateByTextScript(PROBES.createButton.text, '[role=dialog] button,[role=dialog] [role=button]')
+  );
+  if (!createBtn) throw new Error('could not find the Create button — run driveDiagnose and update drive-probes.js');
+  await realClickAt(win, createBtn);
+  await sleep(2500);
+  win.hide();
+}
+
+// Find-or-create with the duplicate guard. The ONLY sanctioned way to obtain a
+// month or task folder id.
+async function findOrCreateFolder(parentId, name) {
+  const existing = await findChildFoldersByName(parentId, name);
+  if (existing.length === 1) return existing[0];
+  if (existing.length > 1) {
+    throw new Error(`Drive already has ${existing.length} folders named "${name}" in this parent. Resolve that by hand — refusing to add another.`);
+  }
+  await createFolder(parentId, name);
+  const after = await findChildFoldersByName(parentId, name);
+  if (after.length !== 1) {
+    throw new Error(`Created "${name}" but read back ${after.length} matches — aborting before upload to avoid duplicating files.`);
+  }
+  return after[0];
+}
+
+// Uploads by intercepting Drive's file chooser and handing Chromium the file
+// PATHS. Chromium streams from disk, so there is no size ceiling — which is
+// what makes .aep project files deliverable.
+async function uploadFiles(folderId, filePaths) {
+  await navigateToFolder(folderId);
+  const win = getDriveWindow({ show: true });
+  win.focus();
+  win.webContents.focus();
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+  await sleep(1200);
+
+  return withDebugger(win, async (dbg) => {
+    let chooser = null;
+    const onMessage = (_e, method, params) => {
+      if (method === 'Page.fileChooserOpened') chooser = params;
+    };
+    dbg.on('message', onMessage);
+    try {
+      await dbg.sendCommand('Page.enable');
+      await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+
+      const newBtn = await win.webContents.executeJavaScript(
+        locateByTextScript(PROBES.newButton.text, '[role=button],button')
+      );
+      if (!newBtn) throw new Error('could not find the New button — run driveDiagnose and update drive-probes.js');
+      await realClickAt(win, newBtn);
+      await sleep(1500);
+
+      const item = await win.webContents.executeJavaScript(
+        locateByTextScript(PROBES.menuItemFileUpload.text, '[role=menuitem]')
+      );
+      if (!item) throw new Error('could not find the "File upload" menu item — run driveDiagnose and update drive-probes.js');
+      await realClickAt(win, item);
+
+      // Wait for the intercepted chooser rather than guessing with a sleep.
+      const deadline = Date.now() + 15000;
+      while (!chooser && Date.now() < deadline) await sleep(300);
+      if (!chooser) {
+        throw new Error('file chooser never opened — nothing was uploaded. Run driveDiagnose with { probeUpload: true }.');
+      }
+
+      await dbg.sendCommand('DOM.setFileInputFiles', {
+        files: filePaths,
+        backendNodeId: chooser.backendNodeId,
+      });
+
+      return { strategy: 'fileChooser', mode: chooser.mode, uploaded: filePaths.map(p => path.basename(p)) };
+    } finally {
+      dbg.removeListener('message', onMessage);
+      try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
+    }
+  });
+}
+
+// Resolves the destination, uploads, and verifies. NEVER writes to Airtable —
+// the caller decides that, and only when `missing` is empty.
+async function deliver({ appFolderId, monthName, taskName, filePaths }) {
+  if (!appFolderId) throw new Error('no Drive folder configured for this app code');
+  if (!monthName || !taskName) throw new Error('missing month or task folder name');
+  if (!Array.isArray(filePaths) || !filePaths.length) throw new Error('no files to upload');
+
+  const login = await ensureLoggedIn();
+  if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
+
+  // The <App>_creatives folder must already exist; a typo-created sibling would
+  // silently split a client's deliverables, so never create at this level.
+  const appNav = await navigateToFolder(appFolderId);
+  if (appNav.folderId !== appFolderId) {
+    throw new Error(`configured app folder ${appFolderId} is not reachable — check the Settings URL`);
+  }
+
+  const pre = await preflight();
+  if (!pre.ok) {
+    throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}. Run driveDiagnose and update drive-probes.js`);
+  }
+
+  const warnings = [];
+  const monthId = await findOrCreateFolder(appFolderId, monthName);
+  const taskId = await findOrCreateFolder(monthId, taskName);
+
+  const existing = await listFolderFileNames(taskId);
+  const clashes = filePaths.map(p => path.basename(p)).filter(n => existing.includes(n));
+  if (clashes.length) {
+    warnings.push(`Drive already has these files and will create duplicates rather than replace them: ${clashes.join(', ')}`);
+  }
+
+  await uploadFiles(taskId, filePaths);
+
+  // Verification gate: reload fresh and confirm every expected name arrived.
+  // Uploads are async, so poll rather than checking once.
+  const expected = filePaths.map(p => path.basename(p));
+  let missing = expected.slice();
+  const deadline = Date.now() + 120000;
+  while (missing.length && Date.now() < deadline) {
+    await sleep(4000);
+    const present = await listFolderFileNames(taskId);
+    missing = expected.filter(n => !present.includes(n));
+  }
+
+  const nav = await navigateToFolder(taskId);
+  getDriveWindow({ show: false }).hide();
+  return { folderUrl: nav.url, folderId: taskId, missing, warnings };
+}
+
 module.exports = {
   getDriveWindow,
   waitForLoad,
@@ -402,5 +667,13 @@ module.exports = {
   navigateToFolder,
   diagnose,
   withDebugger,
+  preflight,
+  listFolderItems,
+  listFolderFileNames,
+  findChildFoldersByName,
+  findOrCreateFolder,
+  createFolder,
+  uploadFiles,
+  deliver,
   PARTITION,
 };
