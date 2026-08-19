@@ -95,11 +95,19 @@ async function ensureLoggedIn() {
 // listener, so a load that finished in between was missed and the wait hung
 // forever — which is exactly what happened when re-loading the current URL.
 async function loadAndWait(win, url) {
-  try {
-    await win.webContents.loadURL(url);
-  } catch (err) {
-    // ERR_ABORTED is normal when a navigation is superseded or same-document.
-    if (!String(err && err.message).includes('ERR_ABORTED')) throw err;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await win.webContents.loadURL(url);
+      return;
+    } catch (err) {
+      const msg = String(err && err.message);
+      // Normal when a navigation is superseded or same-document.
+      if (msg.includes('ERR_ABORTED')) return;
+      // ERR_FAILED is usually a cancelled/raced load; retry once before giving up.
+      if (attempt === 2) throw err;
+      logFn(`loadAndWait: ${msg} — retrying once`);
+      await sleep(1500);
+    }
   }
 }
 
@@ -589,18 +597,25 @@ async function findOrCreateFolder(parentId, name) {
 
   await createFolder(parentId, name);
 
-  // Drive's listing can lag behind creation, so force a real reload and retry
-  // briefly rather than trusting a single immediate read.
+  // Navigate ONCE, then poll the DOM in place. Re-navigating on every retry
+  // issued a new loadURL before the previous one finished, aborting it
+  // (ERR_FAILED). Drive updates its listing live, so re-reading the current
+  // page is both correct and much faster.
+  await navigateToFolder(parentId, { force: true });
+  const win = getDriveWindow({ show: false });
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+
   let after = [];
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 25000;
   while (Date.now() < deadline) {
-    await sleep(2500);
-    after = await findChildFoldersByName(parentId, name, { force: true });
+    await sleep(2000);
+    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    after = items.filter(i => i.isFolder && i.name === name).map(i => i.id);
     if (after.length) break;
   }
 
   if (after.length !== 1) {
-    const all = await listFolderItems(parentId, { force: true });
+    const all = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
     const folderNames = all.filter(i => i.isFolder).map(i => i.name);
     throw new Error(`Created "${name}" but read back ${after.length} matches. Folders now in parent: ${JSON.stringify(folderNames)} — aborting before upload to avoid duplicating files.`);
   }
