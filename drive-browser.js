@@ -430,7 +430,94 @@ async function diagnose(folderId, opts = {}) {
     }
   }
 
-  return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe, newFolderProbe };
+  // Probes "Folder upload": whether the directory chooser is interceptable the
+  // same way file upload is, and whether it accepts one or several folder paths.
+  //
+  // SAFE BY DEFAULT: with no opts.folderPaths it only reports the chooser mode
+  // and cancels — nothing is uploaded. Passing folderPaths performs a REAL
+  // upload into whatever folder is open, so point it at a scratch folder.
+  let folderUploadProbe = null;
+  if (opts.probeFolderUpload) {
+    win.show();
+    win.focus();
+    win.webContents.focus();
+    await sleep(600);
+
+    folderUploadProbe = await withDebugger(win, async (dbg) => {
+      const seenEvents = [];
+      let chooser = null;
+      const onMessage = (_e, method, params) => {
+        seenEvents.push(method);
+        if (method === 'Page.fileChooserOpened') chooser = params;
+      };
+      dbg.on('message', onMessage);
+      try {
+        await dbg.sendCommand('Page.enable');
+        await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+
+        await execJS(win, 'click:new', clickByTextScript(PROBES.newButton.text));
+        await sleep(1500);
+        const target = await execJS(win, 'locate:folderUpload',
+          locateByTextScript('Folder upload', '[role=menuitem]'));
+        if (!target) {
+          return { error: 'could not find the "Folder upload" menu item', menuSeen: await execJS(win, 'dumpMenu', DUMP_MENU_SCRIPT) };
+        }
+        await realClickAt(win, target);
+
+        const deadline = Date.now() + 15000;
+        while (!chooser && Date.now() < deadline) await sleep(300);
+        if (!chooser) {
+          return { chooserIntercepted: false, cdpEventsSeen: [...new Set(seenEvents)] };
+        }
+
+        const result = {
+          chooserIntercepted: true,
+          mode: chooser.mode,                 // differs from file upload's "selectMultiple"
+          backendNodeId: chooser.backendNodeId,
+          cdpEventsSeen: [...new Set(seenEvents)],
+        };
+
+        // Optional live test: does setFileInputFiles accept directory paths,
+        // and can it take more than one at a time?
+        const paths = Array.isArray(opts.folderPaths) ? opts.folderPaths : [];
+        if (paths.length) {
+          try {
+            await dbg.sendCommand('DOM.setFileInputFiles', {
+              files: paths,
+              backendNodeId: chooser.backendNodeId,
+            });
+            result.setFilesAccepted = true;
+            result.pathsSent = paths.length;
+          } catch (err) {
+            result.setFilesAccepted = false;
+            result.setFilesError = err.message;
+          }
+          await sleep(2500);
+          // Drive asks for confirmation on folder uploads; capture its wording.
+          result.dialogAfter = await execJS(win, 'dumpDialogs', `(() => {
+            const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+            const vis = e => { const r = e.getBoundingClientRect(); return e.offsetParent !== null && r.width > 0; };
+            return [...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(vis).map(d => ({
+              text: norm(d.innerText).slice(0, 200),
+              buttons: [...d.querySelectorAll('button,[role=button]')].filter(vis).map(b => norm(b.innerText).slice(0, 25)),
+            }));
+          })()`).catch(e => ({ err: e.message }));
+        }
+        return result;
+      } finally {
+        dbg.removeListener('message', onMessage);
+        try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
+        if (!Array.isArray(opts.folderPaths) || !opts.folderPaths.length) {
+          // Nothing was uploaded — close any menu/dialog left open.
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+          win.hide();
+        }
+      }
+    });
+  }
+
+  return { loggedIn: true, navigatedTo: nav, report, rows, uploadProbe, newFolderProbe, folderUploadProbe };
 }
 
 
