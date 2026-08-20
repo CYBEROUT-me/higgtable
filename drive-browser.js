@@ -629,7 +629,22 @@ async function listFolderItems(folderId, opts = {}) {
   await navigateToFolder(folderId, opts);
   const win = getDriveWindow({ show: false });
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
-  await sleep(1500);
+
+  // Drive renders the page shell before the file grid, so a single read can
+  // catch an empty grid and wrongly report "no such folder" — which then
+  // creates a DUPLICATE of a folder that already exists. Polling for a
+  // non-empty result would break genuinely empty folders, so instead wait
+  // until two consecutive reads agree.
+  let previous = null;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await sleep(1500);
+    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+    const fingerprint = JSON.stringify(items.map(i => i.id).sort());
+    if (previous !== null && fingerprint === previous) return items;
+    previous = fingerprint;
+  }
+  logFn(`listFolderItems: listing never settled for ${folderId}; using last read`);
   return execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
 }
 
