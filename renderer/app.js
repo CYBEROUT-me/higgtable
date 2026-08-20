@@ -1884,20 +1884,25 @@ async function openAutofillModal() {
   const btn = { set disabled(v) { btns.forEach(b => { b.disabled = v; }); },
                 set textContent(v) { btns.forEach(b => { b.textContent = v; }); } };
   try {
-    const wanted = records.flatMap(r => {
-      const base = stripAspectRatio(r.fields['Name']);
-      return [`${base}_1x1.png`, `${base}_9x16.mp4`];
-    });
+    // Search every ratio in one walk. Demanding exactly _1x1.png / _9x16.mp4
+    // meant a variation rendered in a single ratio matched nothing at all.
+    const wanted = buildWantedFilenames(
+      records.map(r => stripAspectRatio(r.fields['Name'])),
+      RATIOS
+    );
     log(`openAutofillModal: searching ${state.workingDirectory} for ${wanted.length} file(s)`);
     const found = await window.app.findAssetFiles(state.workingDirectory, wanted);
 
     btn.textContent = 'Checking video lengths...';
     pendingAutofillCandidates = await Promise.all(records.map(async rec => {
       const base = stripAspectRatio(rec.fields['Name']);
-      const previewFilename = `${base}_1x1.png`;
-      const videoFilename = `${base}_9x16.mp4`;
-      const previewPath = found[previewFilename] || null;
-      const videoPath = found[videoFilename] || null;
+      // Prefer the conventional ratio, fall back to whatever was rendered.
+      const previewHit = pickByRatioPreference(base, found, PREVIEW_RATIO_ORDER, 'png');
+      const videoHit = pickByRatioPreference(base, found, VIDEO_RATIO_ORDER, 'mp4');
+      const previewFilename = previewHit ? previewHit.filename : null;
+      const videoFilename = videoHit ? videoHit.filename : null;
+      const previewPath = previewHit ? previewHit.path : null;
+      const videoPath = videoHit ? videoHit.path : null;
 
       const preview = previewPath ? { filename: previewFilename, path: previewPath, include: true } : null;
 
@@ -1918,7 +1923,7 @@ async function openAutofillModal() {
     }));
 
     if (!pendingAutofillCandidates.some(c => c.preview || c.timing)) {
-      alert('No matching "_1x1.png" or "_9x16.mp4" files found for the selected tasks.');
+      alert('No preview image or video found for the selected tasks.\n\nSearched every aspect ratio (1x1, 9x16, 4x5, 16x9, ...) under the working directory.');
       return;
     }
 
