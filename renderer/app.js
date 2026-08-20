@@ -64,6 +64,8 @@ const state = {
   driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
   driveAppFolders: {}, // { appCode: driveFolderId } for delivery destinations; missing/blank = uploads abort
   driveAppMirrors: {}, // { baseCode: [mirrorCode] } — mirror apps deliver into their base app's folder
+  driveTestMode: false, // redirect uploads to a test folder and skip the Airtable write
+  driveTestFolderId: '',
   driveIncludeProjectFiles: false, // ship .aep/.psd sources too; off while testing the automation
 };
 
@@ -222,6 +224,8 @@ async function boot() {
   state.driveAccountIndex = settings.driveAccountIndex || '';
   state.driveAppFolders = settings.driveAppFolders || {};
   state.driveAppMirrors = settings.driveAppMirrors || {};
+  state.driveTestMode = settings.driveTestMode === true;
+  state.driveTestFolderId = settings.driveTestFolderId || '';
   state.driveIncludeProjectFiles = settings.driveIncludeProjectFiles === true;
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
@@ -1637,11 +1641,25 @@ async function uploadTaskToDrive() {
     return;
   }
 
+  // Test mode: the app code is still resolved above (so the unknown-code guard
+  // stays meaningful and mirror resolution is exercised), but the destination is
+  // redirected and the Airtable write is skipped.
+  let destFolderId = appFolderId;
+  if (state.driveTestMode) {
+    if (!state.driveTestFolderId) {
+      alert('Test mode is on but no test folder is set.\n\nAdd one in Settings → Drive Delivery Folders. Nothing was uploaded.');
+      return;
+    }
+    destFolderId = state.driveTestFolderId;
+  }
+
   const monthName = monthFolderName(toISO(new Date()));
   // A mirror code has no label of its own; show the base app it delivers into.
   const baseEntry = Object.entries(DRIVE_APP_LABELS).find(([b]) => state.driveAppFolders[b] === appFolderId);
   const appLabel = DRIVE_APP_LABELS[code] || (baseEntry ? `${baseEntry[1]} (via ${code})` : code);
-  const destination = `${appLabel} / ${monthName} / ${taskName}`;
+  const destination = state.driveTestMode
+    ? `TEST MODE — uploading to the test folder, NOT ${appLabel}\nTest folder / ${monthName} / ${taskName}\nCreative Link will NOT be written.`
+    : `${appLabel} / ${monthName} / ${taskName}`;
   const skipNote = excluded.length
     ? `\n\nNOT uploading ${excluded.length} project file(s):\n${excluded.map(p => p.split('/').pop()).join('\n')}`
     : '';
@@ -1653,13 +1671,18 @@ async function uploadTaskToDrive() {
   btn.disabled = true;
   btn.textContent = 'Uploading...';
   try {
-    const result = await window.app.driveUpload({ appFolderId, monthName, taskName, filePaths });
+    const result = await window.app.driveUpload({ appFolderId: destFolderId, monthName, taskName, filePaths });
     if (result.error) {
       alert(`Upload failed — nothing written to Airtable.\n\n${result.error}`);
       return;
     }
     if (result.missing && result.missing.length) {
       alert(`Upload could not be verified — nothing written to Airtable.\n\nMissing in Drive:\n${result.missing.join('\n')}`);
+      return;
+    }
+    if (state.driveTestMode) {
+      log(`uploadTaskToDrive: TEST MODE — delivered to ${result.folderUrl}, Creative Link left untouched`);
+      alert(`TEST MODE: uploaded ${filePaths.length} file(s) to the test folder.\n\nCreative Link was NOT written.\n\n${result.folderUrl}`);
       return;
     }
     // Verified: safe to record the link. updateRecordField() needs a DOM input
@@ -1956,6 +1979,8 @@ function showSettingsModal(forced = false) {
   document.getElementById('working-dir-input').value = state.workingDirectory || '';
   document.getElementById('drive-account-index-input').value = state.driveAccountIndex || '';
   renderDriveAppFolderRows();
+  document.getElementById('drive-test-mode-input').checked = state.driveTestMode;
+  document.getElementById('drive-test-folder-input').value = state.driveTestFolderId || '';
   document.getElementById('drive-include-project-input').checked = state.driveIncludeProjectFiles;
   document.getElementById('api-key-input').focus();
 }
@@ -2140,6 +2165,26 @@ document.getElementById('drive-account-index-input').addEventListener('change', 
   state.driveAccountIndex = value;
   await window.app.saveSettings({ driveAccountIndex: value });
   log(`drive-account-index-input: Drive account index set to "${value}"`);
+});
+
+document.getElementById('drive-test-mode-input').addEventListener('change', async (e) => {
+  state.driveTestMode = e.target.checked;
+  await window.app.saveSettings({ driveTestMode: state.driveTestMode });
+  log(`drive-test-mode: ${state.driveTestMode ? 'ON — uploads redirected, Creative Link not written' : 'off'}`);
+});
+
+document.getElementById('drive-test-folder-input').addEventListener('change', async (e) => {
+  const raw = e.target.value.trim();
+  const id = raw ? parseFolderIdFromUrl(raw) : '';
+  if (raw && !id) {
+    e.target.value = state.driveTestFolderId || '';
+    alert('That doesn\'t look like a Drive folder URL. Open the test folder in Drive and copy the address bar.');
+    return;
+  }
+  state.driveTestFolderId = id;
+  e.target.value = id;
+  await window.app.saveSettings({ driveTestFolderId: id });
+  log(`drive-test-folder: ${id || '(cleared)'}`);
 });
 
 document.getElementById('drive-include-project-input').addEventListener('change', async (e) => {
