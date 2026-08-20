@@ -11,6 +11,9 @@ const { BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { PROBES, PREFLIGHT_PROBES } = require('./drive-probes');
+// Pure matching helpers, shared with the renderer. Dependency-free, so the main
+// process can require them directly.
+const { matchTasksToFolders, monthSearchOrder } = require('./renderer/drive-link');
 
 const PARTITION = 'persist:gdrive';
 const DRIVE_ROOT = 'https://drive.google.com/drive/my-drive';
@@ -1225,6 +1228,55 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   return { folderUrl, folderId: found[0], monthFolderId: monthId };
 }
 
+// Finds already-uploaded task folders by EXACT name. READ-ONLY: this function
+// never creates anything in Drive, not even the month folder — if the month
+// folder is missing the search simply widens to the other months and then
+// reports what it could not find. The guard is duplicated from deliver() rather
+// than refactored into it, so the working upload path is left untouched.
+async function findFoldersByNames(args) {
+  if (inFlight) {
+    throw new Error('a Drive operation is already running — wait for it to finish before starting another');
+  }
+  const watchdog = new Promise((_r, reject) =>
+    setTimeout(() => reject(new Error('Drive lookup timed out after 5 minutes — check higgtable.log for the last [drive] step reached')), 300000));
+  inFlight = Promise.race([doFindFoldersByNames(args), watchdog]).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function doFindFoldersByNames({ appFolderId, monthName, taskNames }) {
+  if (!appFolderId) throw new Error('no Drive folder configured for this app code');
+  if (!Array.isArray(taskNames) || !taskNames.length) throw new Error('no task names to look up');
+
+  const login = await ensureLoggedIn({ trustCurrentPage: true });
+  if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
+
+  // The month folder's id only exists in its parent's listing, so the parent has
+  // to be read first. That same listing supplies the widen step's candidates.
+  const appWin = await openFolderForWork(appFolderId);
+  const monthFolders = monthSearchOrder(await readListingHere(appWin), monthName);
+  logFn(`findFoldersByNames: ${taskNames.length} task(s), ${monthFolders.length} month folder(s) under ${appFolderId}`);
+
+  const matched = {};
+  const duplicates = [];
+  const searched = [];
+  let remaining = taskNames.slice();
+
+  for (const folder of monthFolders) {
+    if (!remaining.length) break;
+    const win = await openFolderForWork(folder.id);
+    const result = matchTasksToFolders(remaining, await readListingHere(win));
+    Object.assign(matched, result.matched);
+    for (const d of result.duplicates) if (!duplicates.includes(d)) duplicates.push(d);
+    searched.push(folder.name);
+    // A duplicate is a decided outcome, not something to keep hunting for, so
+    // only the genuinely unmatched names carry into the next month folder.
+    remaining = result.unmatched;
+    logFn(`findFoldersByNames: ${folder.name} -> matched ${Object.keys(result.matched).length}, ${remaining.length} still missing`);
+  }
+
+  return { matched, duplicates, unmatched: remaining, searched };
+}
+
 module.exports = {
   getDriveWindow,
   waitForLoad,
@@ -1246,5 +1298,6 @@ module.exports = {
   uploadFiles,
   deliver,
   uploadFolderToDrive,
+  findFoldersByNames,
   PARTITION,
 };

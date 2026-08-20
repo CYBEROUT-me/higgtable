@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('app', {
   driveDiagnose:     (folderId, o) => ipcRenderer.invoke('drive-diagnose', folderId, o),
   driveUpload:       (payload)     => ipcRenderer.invoke('drive-upload', payload),
   driveUploadFolder: (payload)     => ipcRenderer.invoke('drive-upload-folder', payload),
+  driveFindFolders:  (payload)     => ipcRenderer.invoke('drive-find-folders', payload),
   driveProbeMultiUpload: (folderId, paths, mode) =>
     ipcRenderer.invoke('drive-probe-multi-upload', folderId, paths, mode),
   findAssetFilesInFolder: (dir)    => ipcRenderer.invoke('find-asset-files-in-folder', dir),
