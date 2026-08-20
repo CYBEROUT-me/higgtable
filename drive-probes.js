@@ -51,6 +51,17 @@ const PROBES = {
     derivedFrom: '2026-08-19 uploadProbe.menuItems',
     text: 'New folder', // full label is "New folder\n^C then F"
   },
+  menuItemFolderUpload: {
+    describe: 'The "Folder upload" entry in the New menu',
+    derivedFrom: '2026-08-19 uploadProbe.menuItems',
+    text: 'Folder upload', // full label is "Folder upload\n^C then I"
+  },
+  uploadProgressDialog: {
+    describe: 'Upload progress dialog; its "X of Y" counter is the completion signal',
+    derivedFrom: '2026-08-20 folderUploadProbe.dialogAfter — "Uploading 1 item 26 min left... Cancel" / "2 of 99"',
+    selector: '[role=dialog]',
+    counterPattern: '(\\d+)\\s+of\\s+(\\d+)',
+  },
   menuItemFileUpload: {
     describe: 'The "File upload" entry in the New menu',
     derivedFrom: '2026-08-19 uploadProbe.menuItems',

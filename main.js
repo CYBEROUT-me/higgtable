@@ -347,6 +347,16 @@ ipcMain.handle('drive-upload', async (_e, payload) => {
   }
 });
 
+ipcMain.handle('drive-upload-folder', async (_e, payload) => {
+  try {
+    log(`drive-upload-folder: ${payload && payload.taskName}`);
+    return await driveBrowser.uploadFolderToDrive(payload);
+  } catch (err) {
+    log(`drive-upload-folder FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('find-asset-files-in-folder', (_e, dir) => {
   return fs.readdirSync(dir)
     .filter(n => !n.startsWith('.'))

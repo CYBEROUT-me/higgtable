@@ -1597,6 +1597,81 @@ const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 // Uploads the task's local folder to Drive, then writes the Drive folder link
 // into Creative Link — but only if every file was verified present. A wrong
 // link is worse than none: it would look like a delivery that never happened.
+
+// Bulk delivery: each selected task's local folder is uploaded whole via Drive's
+// Folder upload. Tasks run sequentially (the chooser is selectSingle) and each
+// commits independently — one failure never discards the others' work.
+async function uploadSelectedToDrive() {
+  if (!state.selectedIds.size) return;
+  if (!state.workingDirectory) { alert('Set a working directory first (settings).'); return; }
+
+  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
+  if (!records.length) return;
+
+  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
+  const monthName = monthFolderName(toISO(new Date()));
+
+  // Resolve everything first so the confirm dialog shows the real plan.
+  const planned = records.map(rec => {
+    const taskName = rec.fields['Name'];
+    const code = appCodeFromTaskName(taskName);
+    return { rec, taskName, code, appFolderId: resolveAppFolderId(code, folderMap) };
+  });
+
+  const lines = planned.map(p => p.appFolderId
+    ? `  ${p.taskName}  ->  ${DRIVE_APP_LABELS[p.code] || p.code} / ${monthName}`
+    : `  ${p.taskName}  ->  SKIP (no folder configured for "${p.code || '?'}")`);
+  const banner = state.driveTestMode
+    ? 'TEST MODE — everything goes to the test folder and Creative Link is NOT written.\n\n'
+    : '';
+  if (!confirm(`${banner}Upload ${planned.length} task folder(s) to Drive?\n\n${lines.join('\n')}\n\nRuns one task at a time and can take a long time.`)) return;
+
+  const btn = document.getElementById('bulk-drive-upload-btn');
+  btn.disabled = true;
+  const results = [];
+  try {
+    for (let i = 0; i < planned.length; i++) {
+      const { rec, taskName, code, appFolderId } = planned[i];
+      btn.textContent = `Uploading ${i + 1}/${planned.length}...`;
+
+      if (!appFolderId) { results.push({ task: taskName, skipped: `no Drive folder configured for "${code || '?'}"` }); continue; }
+
+      const localFolderPath = await window.app.findTaskFolder(state.workingDirectory, taskName);
+      if (!localFolderPath) { results.push({ task: taskName, skipped: 'no local folder with that exact name' }); continue; }
+
+      const stripped = await window.app.stripDsStore(localFolderPath, state.workingDirectory);
+      if (stripped && stripped.error) { results.push({ task: taskName, error: stripped.error }); continue; }
+      if (stripped && stripped.deleted.length) log(`uploadSelectedToDrive: removed ${stripped.deleted.length} .DS_Store from ${taskName}`);
+
+      const destFolderId = state.driveTestMode ? state.driveTestFolderId : appFolderId;
+      if (state.driveTestMode && !destFolderId) { results.push({ task: taskName, error: 'test mode on but no test folder set' }); continue; }
+
+      const res = await window.app.driveUploadFolder({ appFolderId: destFolderId, monthName, taskName, localFolderPath });
+      if (!res || res.error) { results.push({ task: taskName, error: (res && res.error) || 'unknown error' }); continue; }
+
+      if (state.driveTestMode) { results.push({ task: taskName, folderUrl: res.folderUrl }); continue; }
+
+      try {
+        await window.airtable.updateRecord(state.baseId, state.tables[state.activeTable].id, rec.id, {
+          'Creative Link': res.folderUrl,
+        });
+        rec.fields['Creative Link'] = res.folderUrl;
+        results.push({ task: taskName, folderUrl: res.folderUrl });
+      } catch (err) {
+        results.push({ task: taskName, error: `uploaded, but Creative Link not written: ${err.message}` });
+      }
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upload to Drive';
+  }
+
+  const s = summarizeBulkRun(results);
+  log(`uploadSelectedToDrive: ${s.delivered} delivered, ${s.skipped} skipped, ${s.failed} failed`);
+  alert(`${state.driveTestMode ? 'TEST MODE — Creative Link not written.\n\n' : ''}Delivered ${s.delivered}, skipped ${s.skipped}, failed ${s.failed}.\n\n${s.lines.join('\n')}`);
+  render();
+}
+
 async function uploadTaskToDrive() {
   const rec = state.selectedTask;
   if (!rec) { alert('Select a task first.'); return; }
@@ -2122,6 +2197,11 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 });
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
+document.getElementById('bulk-drive-upload-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-drive-upload-btn').disabled) return;
+  uploadSelectedToDrive();
+});
+
 document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-autofill-btn').disabled) return;
   openAutofillModal();

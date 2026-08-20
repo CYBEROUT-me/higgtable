@@ -860,6 +860,134 @@ async function doDeliver({ appFolderId, monthName, taskName, filePaths }) {
   return { folderUrl: nav.url, folderId: taskId, missing, warnings };
 }
 
+
+// Reads Drive's upload progress: { done, total } from the "X of Y" counter, or
+// null when no progress dialog is visible.
+const PROGRESS_SCRIPT = `(() => {
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+  const vis = e => { const r = e.getBoundingClientRect(); return e.offsetParent !== null && r.width > 0; };
+  for (const d of [...document.querySelectorAll(${JSON.stringify(PROBES.uploadProgressDialog.selector)})].filter(vis)) {
+    const m = norm(d.innerText).match(/${PROBES.uploadProgressDialog.counterPattern}/);
+    if (m) return { done: Number(m[1]), total: Number(m[2]) };
+  }
+  return null;
+})()`;
+
+// Uploads a whole local folder via New -> Folder upload. Drive creates the task
+// folder itself, which removes the New-folder dialog — the most failure-prone
+// part of the single-file path. Only the MONTH folder is find-or-created here.
+async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFolderPath }) {
+  if (!appFolderId) throw new Error('no Drive folder configured for this app code');
+  if (!monthName || !taskName || !localFolderPath) throw new Error('missing month, task name, or local folder');
+
+  const login = await ensureLoggedIn();
+  if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
+
+  const appNav = await navigateToFolder(appFolderId);
+  if (appNav.folderId !== appFolderId) {
+    throw new Error(`configured app folder ${appFolderId} is not reachable — check the Settings URL`);
+  }
+  const pre = await preflight();
+  if (!pre.ok) {
+    throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}`);
+  }
+
+  const monthId = await findOrCreateFolder(appFolderId, monthName);
+  logFn(`uploadFolderToDrive: month ${monthName} -> ${monthId}`);
+
+  // Folder upload cannot merge into an existing folder — it would create a
+  // second one with the same name. Refuse rather than duplicate.
+  const already = (await listFolderItems(monthId, { force: true }))
+    .filter(i => i.isFolder && i.name === taskName);
+  if (already.length) {
+    throw new Error(`"${taskName}" already exists in ${monthName}; Folder upload would create a duplicate rather than merge. Delete it first, or use the single-task upload.`);
+  }
+
+  await navigateToFolder(monthId, { force: true });
+  const win = getDriveWindow({ show: true });
+  win.focus();
+  win.webContents.focus();
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+  await sleep(1200);
+
+  await withDebugger(win, async (dbg) => {
+    let chooser = null;
+    const onMessage = (_e, method, params) => {
+      if (method === 'Page.fileChooserOpened') chooser = params;
+    };
+    dbg.on('message', onMessage);
+    try {
+      await dbg.sendCommand('Page.enable');
+      await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+
+      await execJS(win, 'click:new', clickByTextScript(PROBES.newButton.text));
+      await sleep(1500);
+      const item = await execJS(win, 'locate:folderUpload',
+        locateByTextScript(PROBES.menuItemFolderUpload.text, '[role=menuitem]'));
+      if (!item) throw new Error('could not find the "Folder upload" menu item — run driveDiagnose');
+      await realClickAt(win, item);
+
+      const chooserDeadline = Date.now() + 15000;
+      while (!chooser && Date.now() < chooserDeadline) await sleep(300);
+      if (!chooser) throw new Error('folder chooser never opened — nothing was uploaded');
+
+      // mode is "selectSingle": exactly one directory path.
+      await dbg.sendCommand('DOM.setFileInputFiles', {
+        files: [localFolderPath],
+        backendNodeId: chooser.backendNodeId,
+      });
+      logFn(`uploadFolderToDrive: handed Chromium ${localFolderPath}`);
+    } finally {
+      dbg.removeListener('message', onMessage);
+      try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
+    }
+  });
+
+  // Progress-based wait. A 99-file folder took ~26 minutes, so a fixed deadline
+  // would report false failures; only a STALL means something is wrong.
+  const STALL_MS = 4 * 60 * 1000;
+  const CEILING_MS = 2 * 60 * 60 * 1000;
+  const started = Date.now();
+  let lastDone = -1;
+  let lastChange = Date.now();
+  let sawProgress = false;
+  while (Date.now() - started < CEILING_MS) {
+    const p = await execJS(win, 'uploadProgress', PROGRESS_SCRIPT).catch(() => null);
+    if (p) {
+      sawProgress = true;
+      if (p.done !== lastDone) {
+        lastDone = p.done;
+        lastChange = Date.now();
+        logFn(`uploadFolderToDrive: ${p.done}/${p.total}`);
+      }
+      if (p.done >= p.total) break;
+    } else if (sawProgress) {
+      break; // dialog dismissed once complete
+    }
+    if (Date.now() - lastChange > STALL_MS) {
+      throw new Error(`upload stalled at ${lastDone < 0 ? 'no progress' : lastDone} — Creative Link not written for this task`);
+    }
+    await sleep(5000);
+  }
+
+  // Read back the folder Drive created; the link comes from the URL.
+  let found = [];
+  const readDeadline = Date.now() + 60000;
+  while (Date.now() < readDeadline) {
+    await sleep(3000);
+    found = (await listFolderItems(monthId, { force: true }))
+      .filter(i => i.isFolder && i.name === taskName).map(i => i.id);
+    if (found.length) break;
+  }
+  if (found.length !== 1) {
+    throw new Error(`uploaded but read back ${found.length} folders named "${taskName}" — Creative Link not written`);
+  }
+  const nav = await navigateToFolder(found[0]);
+  win.hide();
+  logFn(`uploadFolderToDrive: done -> ${nav.url}`);
+  return { folderUrl: nav.url, folderId: found[0] };
+}
+
 module.exports = {
   getDriveWindow,
   waitForLoad,
@@ -877,5 +1005,6 @@ module.exports = {
   createFolder,
   uploadFiles,
   deliver,
+  uploadFolderToDrive,
   PARTITION,
 };
