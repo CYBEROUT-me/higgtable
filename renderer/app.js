@@ -1791,17 +1791,23 @@ async function openAutofillModal() {
     alert('Set a working directory first (⚙ Settings).');
     return;
   }
-  if (!state.selectedIds.size) return;
-
-  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
+  // Autofill normally runs over the bulk selection, but a plain click clears
+  // that and selects a single task for the rename panel instead. Fall back to
+  // that task so Autofill works for one task without needing Cmd-click.
+  const records = state.selectedIds.size
+    ? state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
+    : [state.selectedTask].filter(r => r && r.fields['Name']);
   if (!records.length) return;
 
   const timingChoices = (state.tables[state.activeTable]?.fields || [])
     .find(f => f.name === 'Timing')?.options?.choices?.map(c => c.name) || [];
 
-  const btn = document.getElementById('bulk-autofill-btn');
-  btn.disabled = true;
-  btn.textContent = 'Searching...';
+  // Either trigger may have started this: the bulk bar or the rename panel.
+  const btns = ['bulk-autofill-btn', 'panel-autofill-btn']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  btns.forEach(b => { b.disabled = true; b.textContent = 'Searching...'; });
+  const btn = { set disabled(v) { btns.forEach(b => { b.disabled = v; }); },
+                set textContent(v) { btns.forEach(b => { b.textContent = v; }); } };
   try {
     const wanted = records.flatMap(r => {
       const base = stripAspectRatio(r.fields['Name']);
@@ -2233,6 +2239,10 @@ document.getElementById('clear-files-btn').addEventListener('click', () => {
 });
 document.getElementById('rename-btn').addEventListener('click', performRename);
 document.getElementById('drive-upload-btn').addEventListener('click', uploadTaskToDrive);
+document.getElementById('panel-autofill-btn').addEventListener('click', () => {
+  if (document.getElementById('panel-autofill-btn').disabled) return;
+  openAutofillModal();
+});
 
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
