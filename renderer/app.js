@@ -1611,7 +1611,11 @@ async function linkSelectedFromDrive() {
   if (!records.length) return;
 
   const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
-  const monthName = monthFolderName(toISO(new Date()));
+  // Real delivery folders are <app>/<year>/<month>/<task>, so the year is needed
+  // as well as the month to know where to look first.
+  const now = new Date();
+  const monthName = monthFolderName(toISO(now));
+  const monthYear = now.getFullYear();
 
   const candidates = records.map(rec => {
     const taskName = rec.fields['Name'];
@@ -1670,6 +1674,7 @@ async function linkSelectedFromDrive() {
       const res = await window.app.driveFindFolders({
         appFolderId: dest,
         monthName,
+        monthYear,
         taskNames: group.map(p => p.taskName),
       });
 

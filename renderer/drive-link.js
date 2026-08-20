@@ -67,6 +67,37 @@ function monthSearchOrder(items, currentMonthName) {
   return [...current, ...rest];
 }
 
+// Real delivery folders nest a YEAR between the app folder and the month:
+//   <App>_creatives / 2026 / 08_August / <task>
+// but the scratch folder used for testing is flat:
+//   <Test GD> / 08_August / <task>
+// Rather than assume either, classify what is actually there. A four-digit name
+// is a year to descend into; an "MM_" prefix is a month to search directly.
+// Anything else is ignored, so a stray folder cannot be mistaken for a period.
+function classifyPeriodFolders(items) {
+  const years = [];
+  const months = [];
+  for (const it of items || []) {
+    if (!it || !it.isFolder || typeof it.name !== 'string') continue;
+    if (/^\d{4}$/.test(it.name)) years.push({ id: it.id, name: it.name });
+    else if (/^\d{2}_/.test(it.name)) months.push({ id: it.id, name: it.name });
+  }
+  return { years, months };
+}
+
+// Years to search, current first, then newest-first. Same cost heuristic as
+// monthSearchOrder: correctness does not depend on the order.
+function yearSearchOrder(years, currentYear) {
+  const cur = (years || []).filter(y => y.name === String(currentYear));
+  const rest = (years || [])
+    .filter(y => y.name !== String(currentYear))
+    .sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
+  return [...cur, ...rest];
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { planLinkRun, matchTasksToFolders, monthSearchOrder };
+  module.exports = {
+    planLinkRun, matchTasksToFolders, monthSearchOrder,
+    classifyPeriodFolders, yearSearchOrder,
+  };
 }

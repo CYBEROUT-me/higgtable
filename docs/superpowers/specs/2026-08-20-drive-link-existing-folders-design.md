@@ -101,6 +101,30 @@ This enforces the project's standing rule that an unverified link is never
 written to Airtable. The feature is worthless — worse than manual work — if a
 link can land on the wrong task.
 
+## Amendment: the year level (2026-08-20, after implementation)
+
+The real delivery layout has a **year** between the app folder and the month:
+
+```
+<App>_creatives / 2026 / 08_August / <task folder>
+```
+
+The scratch folder used for testing is flat (`<Test GD> / 08_August / <task>`),
+which is why the discrepancy was not visible during testing. Rather than assume
+either shape, the traversal classifies what is actually under the destination:
+a four-digit name is a year to descend into, an `MM_` prefix is a month to search
+directly, anything else is ignored. Flat months are searched first (the scratch
+layout, where no year folders exist), then year folders — current year first,
+then newest-first — each searched month-by-month in the order below.
+
+`searched` entries are path labels (`2026/08_August`, or just `08_August` for a
+flat month), so a not-found message names where it actually looked.
+
+**Known gap:** the hidden upload path (`uploadFolderToDrive`) still resolves
+`<app>/<month>` with no year level. It is correct for the flat scratch folder and
+wrong for a real app folder. It must be made year-aware before those buttons are
+uncommented.
+
 ## Month search order
 
 The widen step reads month folders newest-first. Names are `MM_Month`

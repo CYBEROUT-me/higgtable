@@ -13,7 +13,9 @@ const path = require('path');
 const { PROBES, PREFLIGHT_PROBES } = require('./drive-probes');
 // Pure matching helpers, shared with the renderer. Dependency-free, so the main
 // process can require them directly.
-const { matchTasksToFolders, monthSearchOrder } = require('./renderer/drive-link');
+const {
+  matchTasksToFolders, monthSearchOrder, classifyPeriodFolders, yearSearchOrder,
+} = require('./renderer/drive-link');
 
 const PARTITION = 'persist:gdrive';
 const DRIVE_ROOT = 'https://drive.google.com/drive/my-drive';
@@ -1243,35 +1245,56 @@ async function findFoldersByNames(args) {
   return inFlight;
 }
 
-async function doFindFoldersByNames({ appFolderId, monthName, taskNames }) {
+async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNames }) {
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!Array.isArray(taskNames) || !taskNames.length) throw new Error('no task names to look up');
 
   const login = await ensureLoggedIn({ trustCurrentPage: true });
   if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
 
-  // The month folder's id only exists in its parent's listing, so the parent has
-  // to be read first. That same listing supplies the widen step's candidates.
+  // A folder's id only exists in its parent's listing, so each level has to be
+  // read on the way down. Real delivery folders are <app>/<year>/<month>/<task>;
+  // the scratch folder used for testing is flat, <test>/<month>/<task>. Both are
+  // handled by classifying what is actually present rather than assuming.
   const appWin = await openFolderForWork(appFolderId);
-  const monthFolders = monthSearchOrder(await readListingHere(appWin), monthName);
-  logFn(`findFoldersByNames: ${taskNames.length} task(s), ${monthFolders.length} month folder(s) under ${appFolderId}`);
+  const { years, months } = classifyPeriodFolders(await readListingHere(appWin));
+  const currentYear = String(monthYear || new Date().getFullYear());
+  logFn(`findFoldersByNames: ${taskNames.length} task(s) under ${appFolderId} — ${years.length} year folder(s), ${months.length} flat month folder(s)`);
 
   const matched = {};
   const duplicates = [];
   const searched = [];
   let remaining = taskNames.slice();
 
-  for (const folder of monthFolders) {
-    if (!remaining.length) break;
+  // Searches one month folder. Returns true when every task has been decided.
+  const searchMonth = async (folder, label) => {
     const win = await openFolderForWork(folder.id);
     const result = matchTasksToFolders(remaining, await readListingHere(win));
     Object.assign(matched, result.matched);
     for (const d of result.duplicates) if (!duplicates.includes(d)) duplicates.push(d);
-    searched.push(folder.name);
+    searched.push(label);
     // A duplicate is a decided outcome, not something to keep hunting for, so
     // only the genuinely unmatched names carry into the next month folder.
     remaining = result.unmatched;
-    logFn(`findFoldersByNames: ${folder.name} -> matched ${Object.keys(result.matched).length}, ${remaining.length} still missing`);
+    logFn(`findFoldersByNames: ${label} -> matched ${Object.keys(result.matched).length}, ${remaining.length} still missing`);
+    return remaining.length === 0;
+  };
+
+  // Flat months directly under the destination first: that is the scratch-folder
+  // layout, and when it applies there are no year folders to descend into.
+  for (const m of monthSearchOrder(months.map(f => ({ ...f, isFolder: true })), monthName)) {
+    if (!remaining.length) break;
+    if (await searchMonth(m, m.name)) break;
+  }
+
+  for (const year of yearSearchOrder(years, currentYear)) {
+    if (!remaining.length) break;
+    const yearWin = await openFolderForWork(year.id);
+    const yearMonths = monthSearchOrder(await readListingHere(yearWin), monthName);
+    for (const m of yearMonths) {
+      if (!remaining.length) break;
+      if (await searchMonth(m, `${year.name}/${m.name}`)) break;
+    }
   }
 
   return { matched, duplicates, unmatched: remaining, searched };

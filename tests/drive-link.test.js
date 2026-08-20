@@ -1,4 +1,7 @@
-const { planLinkRun, matchTasksToFolders, monthSearchOrder } = require('../renderer/drive-link');
+const {
+  planLinkRun, matchTasksToFolders, monthSearchOrder,
+  classifyPeriodFolders, yearSearchOrder,
+} = require('../renderer/drive-link');
 
 const cand = (over = {}) => ({
   recordId: 'rec1', taskName: 'HC_1952_Stat_NEW_9x16',
@@ -129,5 +132,58 @@ describe('monthSearchOrder', () => {
 
   test('returns an empty list for an empty listing', () => {
     expect(monthSearchOrder([], '08_August')).toEqual([]);
+  });
+});
+
+describe('classifyPeriodFolders', () => {
+  const items = [
+    { id: 'y6', name: '2026', isFolder: true },
+    { id: 'y5', name: '2025', isFolder: true },
+    { id: 'm8', name: '08_August', isFolder: true },
+    { id: 'junk', name: 'Archive', isFolder: true },
+    { id: 'f1', name: '2026', isFolder: false },
+  ];
+
+  test('separates year folders from month folders', () => {
+    const r = classifyPeriodFolders(items);
+    expect(r.years).toEqual([{ id: 'y6', name: '2026' }, { id: 'y5', name: '2025' }]);
+    expect(r.months).toEqual([{ id: 'm8', name: '08_August' }]);
+  });
+
+  test('ignores folders that are neither a year nor a month', () => {
+    expect(classifyPeriodFolders(items).years.some(y => y.name === 'Archive')).toBe(false);
+    expect(classifyPeriodFolders(items).months.some(m => m.name === 'Archive')).toBe(false);
+  });
+
+  test('ignores files even when they look like a year', () => {
+    expect(classifyPeriodFolders(items).years).toHaveLength(2);
+  });
+
+  test('does not treat a five-digit name as a year', () => {
+    expect(classifyPeriodFolders([{ id: 'x', name: '20265', isFolder: true }]).years).toEqual([]);
+  });
+
+  test('handles an empty listing', () => {
+    expect(classifyPeriodFolders([])).toEqual({ years: [], months: [] });
+  });
+});
+
+describe('yearSearchOrder', () => {
+  const years = [{ id: 'y4', name: '2024' }, { id: 'y6', name: '2026' }, { id: 'y5', name: '2025' }];
+
+  test('puts the current year first, then the rest newest-first', () => {
+    expect(yearSearchOrder(years, 2025).map(y => y.name)).toEqual(['2025', '2026', '2024']);
+  });
+
+  test('accepts the current year as a string', () => {
+    expect(yearSearchOrder(years, '2026').map(y => y.name)).toEqual(['2026', '2025', '2024']);
+  });
+
+  test('still returns every year when the current one is absent', () => {
+    expect(yearSearchOrder(years, 2030).map(y => y.name)).toEqual(['2026', '2025', '2024']);
+  });
+
+  test('handles an empty list', () => {
+    expect(yearSearchOrder([], 2026)).toEqual([]);
   });
 });
