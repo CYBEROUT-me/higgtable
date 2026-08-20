@@ -95,6 +95,15 @@ const PROBES = {
 // they are validated at their point of use instead.
 const PREFLIGHT_PROBES = ['mainRegion'];
 
+// VIRTUALISED LISTINGS. Drive keeps only rows near the viewport in the DOM; the
+// rest appear on scroll. Reading the rendered rows therefore yields a PARTIAL
+// listing, and because those rendered rows are stable, a settle check confirms
+// it as complete. Observed 2026-08-20: task folders in a real client month were
+// reported missing while a two-item scratch folder always worked. Every listing
+// read now scrolls to the end first (exhaustListing in drive-browser.js). Any
+// future code that reads rows directly instead of going through readListingHere
+// will reintroduce this.
+
 // MEASURED DEAD ENDS — do not rebuild these. Both were probed against the live
 // Drive on 2026-08-20 (probeMultiFolderUpload in drive-browser.js).
 //

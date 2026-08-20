@@ -688,6 +688,78 @@ const LIST_ITEMS_SCRIPT = `(() => {
   }).filter(i => i.id && i.name);
 })()`;
 
+// Drive VIRTUALISES long listings: only rows near the viewport exist in the DOM,
+// and the rest materialise on scroll. A snapshot of the rendered rows is
+// therefore a partial listing — and the settle check above confirms stability,
+// not completeness, so a partial listing settles immediately and looks correct.
+// That silently hid task folders in real client months (hundreds of folders)
+// while a two-item scratch folder always worked.
+//
+// The scrolling element is found by walking up from an item row to the first
+// ancestor that actually overflows, so this needs no new selector. It is
+// self-verifying: if the row count grows, the scroll worked.
+const SCROLL_LISTING_SCRIPT = `(() => {
+  const sel = ${JSON.stringify(PROBES.itemRow.selector)};
+  let el = document.querySelector(sel);
+  let scroller = null;
+  while (el) {
+    if (el.scrollHeight > el.clientHeight + 40) { scroller = el; break; }
+    el = el.parentElement;
+  }
+  if (!scroller) scroller = document.scrollingElement || document.body;
+  const before = scroller.scrollTop;
+  scroller.scrollTop = scroller.scrollHeight;
+  return {
+    rows: document.querySelectorAll(sel).length,
+    moved: scroller.scrollTop !== before,
+    atEnd: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8,
+  };
+})()`;
+
+const SCROLL_TO_TOP_SCRIPT = `(() => {
+  const sel = ${JSON.stringify(PROBES.itemRow.selector)};
+  let el = document.querySelector(sel);
+  while (el) {
+    if (el.scrollHeight > el.clientHeight + 40) { el.scrollTop = 0; return true; }
+    el = el.parentElement;
+  }
+  const d = document.scrollingElement || document.body;
+  d.scrollTop = 0;
+  return false;
+})()`;
+
+// Scrolls to the end of the listing so every row exists in the DOM, then returns
+// the complete set. Stops when the row count stops growing twice in a row, so a
+// slow batch is not mistaken for the end.
+async function exhaustListing(win, initial) {
+  let items = initial;
+  let stable = 0;
+  for (let i = 0; i < 60 && stable < 2; i++) {
+    let info;
+    try {
+      info = await execJS(win, 'scrollListing', SCROLL_LISTING_SCRIPT);
+    } catch (err) {
+      logFn(`exhaustListing: scroll failed (${err.message}) — using ${items.length} row(s)`);
+      break;
+    }
+    await sleep(700);
+    const next = await readItems(win).catch(() => items);
+    if (next.length > items.length) {
+      items = next;
+      stable = 0;
+    } else {
+      items = next.length ? next : items;
+      stable += 1;
+    }
+    if (info && info.atEnd && !info.moved) stable = 2;
+  }
+  if (items.length > initial.length) {
+    logFn(`exhaustListing: scrolling revealed ${items.length - initial.length} more row(s) (${items.length} total)`);
+  }
+  try { await execJS(win, 'scrollToTop', SCROLL_TO_TOP_SCRIPT); } catch (e) { /* best effort */ }
+  return items;
+}
+
 // Reads the raw rows and applies the tested folder test. Every listing read goes
 // through here so the two can never drift apart.
 async function readItems(win) {
@@ -729,7 +801,9 @@ async function readListingHere(win, opts = {}) {
       continue;
     }
     const fingerprint = JSON.stringify(items.map(i => i.id).sort());
-    if (items.length && fingerprint === previous) return items;
+    // Settling proves the RENDERED rows are stable; it does not prove they are
+    // all of them. Scroll the rest into existence before answering.
+    if (items.length && fingerprint === previous) return exhaustListing(win, items);
     previous = fingerprint;
   }
   if (readError && !items.length) {
