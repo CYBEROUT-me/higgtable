@@ -1629,6 +1629,10 @@ async function uploadSelectedToDrive() {
   const btn = document.getElementById('bulk-drive-upload-btn');
   btn.disabled = true;
   const results = [];
+  // Month folder id per destination, resolved once and reused for the rest of
+  // the run. Scoped to this run so deleting folders in Drive between runs can
+  // never leave a stale id behind.
+  const monthIdByDest = {};
   try {
     for (let i = 0; i < planned.length; i++) {
       const { rec, taskName, code, appFolderId } = planned[i];
@@ -1646,8 +1650,12 @@ async function uploadSelectedToDrive() {
       const destFolderId = state.driveTestMode ? state.driveTestFolderId : appFolderId;
       if (state.driveTestMode && !destFolderId) { results.push({ task: taskName, error: 'test mode on but no test folder set' }); continue; }
 
-      const res = await window.app.driveUploadFolder({ appFolderId: destFolderId, monthName, taskName, localFolderPath });
+      const res = await window.app.driveUploadFolder({
+        appFolderId: destFolderId, monthName, taskName, localFolderPath,
+        monthFolderId: monthIdByDest[destFolderId],
+      });
       if (!res || res.error) { results.push({ task: taskName, error: (res && res.error) || 'unknown error' }); continue; }
+      if (res.monthFolderId) monthIdByDest[destFolderId] = res.monthFolderId;
 
       if (state.driveTestMode) { results.push({ task: taskName, folderUrl: res.folderUrl }); continue; }
 

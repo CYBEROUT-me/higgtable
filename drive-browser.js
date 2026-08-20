@@ -624,28 +624,39 @@ const LIST_ITEMS_SCRIPT = `(() => {
   }).filter(i => i.id && i.name);
 })()`;
 
+// Reading a Drive listing has two distinct hazards, and getting either wrong
+// creates duplicate folders:
+//   1. Drive paints the page shell — [role=main] included — well before the
+//      file grid. A grid that has not rendered yet reads as ZERO rows, which
+//      is indistinguishable from a genuinely empty folder. Believing that
+//      zero is what made findOrCreateFolder create a second "08_August".
+//   2. The grid streams rows in. A listing read mid-stream can be non-empty
+//      yet still be missing the very folder being looked for.
+// So: a non-empty listing is trusted only once two consecutive reads agree,
+// and an empty listing is trusted only after a full patience window of
+// nothing but empty reads. Waiting costs seconds; a wrong answer costs a
+// duplicate folder and a failed run.
+const LISTING_PATIENCE_MS = 30000;
+
 async function listFolderItems(folderId, opts = {}) {
+  const patienceMs = opts.patienceMs != null ? opts.patienceMs : LISTING_PATIENCE_MS;
   logFn(`listFolderItems: ${folderId}${opts.force ? ' (forced reload)' : ''}`);
   await navigateToFolder(folderId, opts);
   const win = getDriveWindow({ show: false });
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
 
-  // Drive renders the page shell before the file grid, so a single read can
-  // catch an empty grid and wrongly report "no such folder" — which then
-  // creates a DUPLICATE of a folder that already exists. Polling for a
-  // non-empty result would break genuinely empty folders, so instead wait
-  // until two consecutive reads agree.
+  const deadline = Date.now() + patienceMs;
   let previous = null;
-  const deadline = Date.now() + 20000;
+  let items = [];
   while (Date.now() < deadline) {
     await sleep(1500);
-    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+    items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
     const fingerprint = JSON.stringify(items.map(i => i.id).sort());
-    if (previous !== null && fingerprint === previous) return items;
+    if (items.length && fingerprint === previous) return items;
     previous = fingerprint;
   }
-  logFn(`listFolderItems: listing never settled for ${folderId}; using last read`);
-  return execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+  logFn(`listFolderItems: ${folderId} read empty for ${Math.round(patienceMs / 1000)}s — treating it as an empty folder`);
+  return items;
 }
 
 async function listFolderFileNames(folderId) {
@@ -891,7 +902,7 @@ const PROGRESS_SCRIPT = `(() => {
 // Uploads a whole local folder via New -> Folder upload. Drive creates the task
 // folder itself, which removes the New-folder dialog — the most failure-prone
 // part of the single-file path. Only the MONTH folder is find-or-created here.
-async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFolderPath }) {
+async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFolderPath, monthFolderId }) {
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!monthName || !taskName || !localFolderPath) throw new Error('missing month, task name, or local folder');
 
@@ -907,8 +918,11 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
     throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}`);
   }
 
-  const monthId = await findOrCreateFolder(appFolderId, monthName);
-  logFn(`uploadFolderToDrive: month ${monthName} -> ${monthId}`);
+  // A bulk run passes the month folder it already resolved. The answer cannot
+  // change between tasks in one run, and every extra find-or-create is another
+  // chance to misread a slow listing and create a duplicate month folder.
+  const monthId = monthFolderId || await findOrCreateFolder(appFolderId, monthName);
+  logFn(`uploadFolderToDrive: month ${monthName} -> ${monthId}${monthFolderId ? ' (reused)' : ''}`);
 
   // Folder upload cannot merge into an existing folder — it would create a
   // second one with the same name. Refuse rather than duplicate.
@@ -1000,7 +1014,7 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   const nav = await navigateToFolder(found[0]);
   win.hide();
   logFn(`uploadFolderToDrive: done -> ${nav.url}`);
-  return { folderUrl: nav.url, folderId: found[0] };
+  return { folderUrl: nav.url, folderId: found[0], monthFolderId: monthId };
 }
 
 module.exports = {
