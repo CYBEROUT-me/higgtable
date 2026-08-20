@@ -100,10 +100,23 @@ async function ensureLoggedIn() {
 // completes. The old code fired loadURL and THEN attached a did-stop-loading
 // listener, so a load that finished in between was missed and the wait hung
 // forever — which is exactly what happened when re-loading the current URL.
+// loadURL's promise can simply never settle when Drive stalls mid-load, and an
+// unbounded await there hung a whole run with nothing in the log — a blank
+// window and no error. Every navigation gets a hard ceiling.
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function loadAndWait(win, url) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await win.webContents.loadURL(url);
+      await withTimeout(win.webContents.loadURL(url), 45000, `loading ${url}`);
       return;
     } catch (err) {
       const msg = String(err && err.message);
@@ -112,6 +125,7 @@ async function loadAndWait(win, url) {
       // ERR_FAILED is usually a cancelled/raced load; retry once before giving up.
       if (attempt === 2) throw err;
       logFn(`loadAndWait: ${msg} — retrying once`);
+      try { win.webContents.stop(); } catch (e) { /* best effort */ }
       await sleep(1500);
     }
   }
@@ -130,6 +144,25 @@ async function navigateToFolder(folderId, { force = false } = {}) {
   const url = win.webContents.getURL();
   const m = url.match(/\/folders\/([A-Za-z0-9_-]+)/);
   return { url, folderId: m ? m[1] : null };
+}
+
+// Opens a folder and waits for it to actually render. Drive intermittently
+// serves a blank page — the title updates but nothing else does — so a single
+// attempt is not enough to conclude the folder is unusable.
+async function openFolderForWork(folderId) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await navigateToFolder(folderId, { force: true });
+    const win = getDriveWindow();
+    try {
+      await waitForSelector(win, PROBES.mainRegion.selector, 20000);
+      return win;
+    } catch (err) {
+      if (attempt === 2) throw new Error(`Drive never rendered folder ${folderId} (blank page): ${err.message}`);
+      logFn(`openFolderForWork: ${folderId} came up blank — reloading once`);
+      try { win.webContents.stop(); } catch (e) { /* best effort */ }
+      await sleep(2500);
+    }
+  }
 }
 
 // Runs `fn` with the CDP debugger attached, always detaching afterwards so a
@@ -943,11 +976,8 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
 
   // ONE navigation serves both the duplicate check and the upload: the check
   // reads the very page the upload is about to act on.
-  await navigateToFolder(monthId, { force: true });
-  const win = getDriveWindow({ show: true });
-  win.focus();
+  const win = await openFolderForWork(monthId);
   win.webContents.focus();
-  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
 
   // Folder upload cannot merge into an existing folder — it would create a
   // second one with the same name. Refuse rather than duplicate.
@@ -966,15 +996,32 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
       await dbg.sendCommand('Page.enable');
       await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
 
-      await execJS(win, 'click:new', clickByTextScript(PROBES.newButton.text));
-      await sleep(1500);
-      const item = await execJS(win, 'locate:folderUpload',
-        locateByTextScript(PROBES.menuItemFolderUpload.text, '[role=menuitem]'));
-      if (!item) throw new Error('could not find the "Folder upload" menu item — run driveDiagnose');
-      await realClickAt(win, item);
-
-      const chooserDeadline = Date.now() + 15000;
-      while (!chooser && Date.now() < chooserDeadline) await sleep(300);
+      // The window stays hidden. sendInputEvent is delivered straight to the
+      // webContents, so unlike real OS input it needs no on-screen window —
+      // but that is reasoned, not measured, for this menu specifically. So if
+      // the chooser does not open, show the window and try once more instead
+      // of failing the task. The fallback is logged: if it fires every run,
+      // hidden operation does not work and the default must change back.
+      for (let attempt = 1; attempt <= 2 && !chooser; attempt++) {
+        if (attempt === 2) {
+          logFn('uploadFolderToDrive: chooser did not open while hidden — showing the window and retrying');
+          win.show();
+          win.focus();
+          win.webContents.focus();
+          await sleep(1000);
+        }
+        await execJS(win, 'click:new', clickByTextScript(PROBES.newButton.text));
+        await sleep(1500);
+        const item = await execJS(win, 'locate:folderUpload',
+          locateByTextScript(PROBES.menuItemFolderUpload.text, '[role=menuitem]'));
+        if (!item) {
+          if (attempt === 2) throw new Error('could not find the "Folder upload" menu item — run driveDiagnose');
+          continue;
+        }
+        await realClickAt(win, item);
+        const chooserDeadline = Date.now() + 15000;
+        while (!chooser && Date.now() < chooserDeadline) await sleep(300);
+      }
       if (!chooser) throw new Error('folder chooser never opened — nothing was uploaded');
 
       // mode is "selectSingle": exactly one directory path.
@@ -1040,10 +1087,13 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   if (found.length !== 1) {
     throw new Error(`uploaded but read back ${found.length} folders named "${taskName}" — Creative Link not written`);
   }
-  const nav = await navigateToFolder(found[0]);
-  win.hide();
-  logFn(`uploadFolderToDrive: done -> ${nav.url}`);
-  return { folderUrl: nav.url, folderId: found[0], monthFolderId: monthId };
+  // The folder URL is derivable from the id: it is the exact shape
+  // navigateToFolder builds and parseFolderIdFromUrl reads. Navigating into the
+  // folder purely to read getURL() cost a full reload per task and left the
+  // window on the wrong folder for the next one.
+  const folderUrl = `https://drive.google.com/drive/folders/${found[0]}`;
+  logFn(`uploadFolderToDrive: done -> ${folderUrl}`);
+  return { folderUrl, folderId: found[0], monthFolderId: monthId };
 }
 
 module.exports = {
@@ -1057,6 +1107,7 @@ module.exports = {
   setLogger,
   preflight,
   readListingHere,
+  openFolderForWork,
   listFolderItems,
   listFolderFileNames,
   findChildFoldersByName,
