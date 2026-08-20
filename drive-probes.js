@@ -95,7 +95,13 @@ const PROBES = {
 // they are validated at their point of use instead.
 const PREFLIGHT_PROBES = ['mainRegion'];
 
-// VIRTUALISED LISTINGS. Drive keeps only rows near the viewport in the DOM; the
+// VIRTUALISED LISTINGS, page size 50. Measured 2026-08-20: six real client month
+// folders each reported EXACTLY 50 rows while holding more, and assigning
+// scrollTop did NOT grow the count — Drive's lazy load ignores programmatic
+// scrolling, the same way its menu items ignore synthetic clicks. Real
+// sendInputEvent wheel input is what loads further pages (exhaustListing).
+//
+// Drive keeps only rows near the viewport in the DOM; the
 // rest appear on scroll. Reading the rendered rows therefore yields a PARTIAL
 // listing, and because those rendered rows are stable, a settle check confirms
 // it as complete. Observed 2026-08-20: task folders in a real client month were

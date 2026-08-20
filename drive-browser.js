@@ -698,7 +698,17 @@ const LIST_ITEMS_SCRIPT = `(() => {
 // The scrolling element is found by walking up from an item row to the first
 // ancestor that actually overflows, so this needs no new selector. It is
 // self-verifying: if the row count grows, the scroll worked.
-const SCROLL_LISTING_SCRIPT = `(() => {
+// Drive VIRTUALISES long listings: only ~50 rows exist in the DOM at a time and
+// the rest materialise on scroll. A snapshot of the rendered rows is therefore a
+// PARTIAL listing — and the settle check confirms stability, not completeness, so
+// a partial listing settles immediately and looks authoritative. That silently
+// hid task folders in real client months (exactly 50 rows read) while a two-item
+// scratch folder always worked.
+//
+// Assigning scrollTop was measured NOT to trigger Drive's lazy load. Real wheel
+// input does, which mirrors the established finding that Drive's menu items only
+// respond to sendInputEvent and not to synthetic DOM events.
+const SCROLL_STATE_SCRIPT = `(() => {
   const sel = ${JSON.stringify(PROBES.itemRow.selector)};
   let el = document.querySelector(sel);
   let scroller = null;
@@ -707,12 +717,15 @@ const SCROLL_LISTING_SCRIPT = `(() => {
     el = el.parentElement;
   }
   if (!scroller) scroller = document.scrollingElement || document.body;
-  const before = scroller.scrollTop;
-  scroller.scrollTop = scroller.scrollHeight;
+  const r = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : null;
   return {
     rows: document.querySelectorAll(sel).length,
-    moved: scroller.scrollTop !== before,
-    atEnd: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8,
+    top: scroller.scrollTop,
+    height: scroller.scrollHeight,
+    client: scroller.clientHeight,
+    x: r ? Math.round(r.left + r.width / 2) : 400,
+    y: r ? Math.round(r.top + r.height / 2) : 400,
+    tag: scroller.tagName,
   };
 })()`;
 
@@ -729,33 +742,54 @@ const SCROLL_TO_TOP_SCRIPT = `(() => {
 })()`;
 
 // Scrolls to the end of the listing so every row exists in the DOM, then returns
-// the complete set. Stops when the row count stops growing twice in a row, so a
-// slow batch is not mistaken for the end.
+// the complete set. Wheel direction is not assumed: if the first direction does
+// not move the scroller, the sign is flipped, and assigning scrollTop is kept as
+// a last resort. Everything is logged, because a silent partial listing is the
+// worst outcome here — it reads as a confident "not found".
 async function exhaustListing(win, initial) {
   let items = initial;
+  let state = await execJS(win, 'scrollState', SCROLL_STATE_SCRIPT).catch(() => null);
+  if (!state) return items;
+
+  let sign = -1;          // macOS natural scrolling: negative deltaY moves down
   let stable = 0;
-  for (let i = 0; i < 60 && stable < 2; i++) {
-    let info;
-    try {
-      info = await execJS(win, 'scrollListing', SCROLL_LISTING_SCRIPT);
-    } catch (err) {
-      logFn(`exhaustListing: scroll failed (${err.message}) — using ${items.length} row(s)`);
-      break;
+  let flipped = false;
+  const startRows = items.length;
+
+  for (let i = 0; i < 80 && stable < 2; i++) {
+    const before = state;
+    win.webContents.sendInputEvent({
+      type: 'mouseWheel',
+      x: before.x, y: before.y,
+      deltaX: 0, deltaY: sign * 600,
+      wheelTicksX: 0, wheelTicksY: sign * 4,
+      modifiers: [], canScroll: true,
+    });
+    await sleep(650);
+
+    state = await execJS(win, 'scrollState', SCROLL_STATE_SCRIPT).catch(() => before);
+
+    if (state.top === before.top && state.rows === before.rows) {
+      if (!flipped) {
+        // Wrong wheel direction for this platform — try the other way once.
+        flipped = true;
+        sign = -sign;
+        logFn(`exhaustListing: wheel did not move the listing, flipping direction`);
+        continue;
+      }
+      // Neither direction moved it: fall back to assigning scrollTop.
+      const forced = await execJS(win, 'forceScroll', SCROLL_STATE_SCRIPT.replace('return {', 'scroller.scrollTop = scroller.scrollHeight; return {')).catch(() => null);
+      if (!forced || forced.rows === before.rows) stable += 1;
+      else state = forced;
+      continue;
     }
-    await sleep(700);
+
     const next = await readItems(win).catch(() => items);
-    if (next.length > items.length) {
-      items = next;
-      stable = 0;
-    } else {
-      items = next.length ? next : items;
-      stable += 1;
-    }
-    if (info && info.atEnd && !info.moved) stable = 2;
+    if (next.length > items.length) { items = next; stable = 0; }
+    else { if (next.length) items = next; stable += 1; }
   }
-  if (items.length > initial.length) {
-    logFn(`exhaustListing: scrolling revealed ${items.length - initial.length} more row(s) (${items.length} total)`);
-  }
+
+  logFn(`exhaustListing: ${startRows} -> ${items.length} row(s) after scrolling (scroller ${state.tag}, ${state.top}/${state.height})`);
   try { await execJS(win, 'scrollToTop', SCROLL_TO_TOP_SCRIPT); } catch (e) { /* best effort */ }
   return items;
 }
