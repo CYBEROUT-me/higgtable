@@ -86,7 +86,12 @@
     <button id="bulk-mark-accept-btn" class="primary">Mark as To Accept</button>
     <button id="bulk-autofill-btn" title="Search the working directory for matching preview images and 9x16 videos, and fill in Preview + Timing for the selected tasks">Autofill</button>
     <button id="bulk-drive-link-btn" title="Find each selected task's folder in Google Drive by name and fill Creative Link">Link from Drive</button>
-    <button id="bulk-drive-upload-btn" title="Upload each selected task's folder to Google Drive and fill Creative Link">Upload to Drive</button>
+    <!-- Drive upload is retained in code (drive-browser.js uploadFolderToDrive, the
+         drive-upload-folder IPC handler, and their tests) but hidden: folders are
+         uploaded to Drive by hand in one drag, then matched with "Link from Drive",
+         which is far faster. Drive's own limits make automated batching impossible —
+         see the measured dead ends in drive-probes.js. Uncomment to restore it. -->
+    <!-- <button id="bulk-drive-upload-btn" title="Upload each selected task's folder to Google Drive and fill Creative Link">Upload to Drive</button> -->
     <button id="bulk-clear-btn">Clear selection</button>
   </div>
 
@@ -146,7 +151,9 @@
       <span id="rename-warning"></span>
       <button id="clear-files-btn">Clear</button>
       <button id="rename-btn" class="primary">Rename Files</button>
-      <button id="drive-upload-btn" title="Upload this task's folder to Google Drive and fill Creative Link">Upload to Drive</button>
+      <!-- Single-task Drive upload, retained in code but hidden — see the note in
+           #bulk-actions-bar. Uncomment to restore it. -->
+      <!-- <button id="drive-upload-btn" title="Upload this task's folder to Google Drive and fill Creative Link">Upload to Drive</button> -->
     </div>
   </div>
 

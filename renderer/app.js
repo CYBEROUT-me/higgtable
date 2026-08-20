@@ -1743,8 +1743,10 @@ async function uploadSelectedToDrive() {
     : '';
   if (!confirm(`${banner}Upload ${planned.length} task folder(s) to Drive?\n\n${lines.join('\n')}\n\nRuns one task at a time and can take a long time.`)) return;
 
+  // Guarded: the button is hidden by default (see renderer/index.html), so this
+  // lookup returns null unless someone has uncommented it.
   const btn = document.getElementById('bulk-drive-upload-btn');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   const results = [];
   // Month folder id per destination, resolved once and reused for the rest of
   // the run. Scoped to this run so deleting folders in Drive between runs can
@@ -1753,7 +1755,7 @@ async function uploadSelectedToDrive() {
   try {
     for (let i = 0; i < planned.length; i++) {
       const { rec, taskName, code, appFolderId } = planned[i];
-      btn.textContent = `Uploading ${i + 1}/${planned.length}...`;
+      if (btn) btn.textContent = `Uploading ${i + 1}/${planned.length}...`;
 
       if (!appFolderId) { results.push({ task: taskName, skipped: `no Drive folder configured for "${code || '?'}"` }); continue; }
 
@@ -1787,8 +1789,7 @@ async function uploadSelectedToDrive() {
       }
     }
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Upload to Drive';
+    if (btn) { btn.disabled = false; btn.textContent = 'Upload to Drive'; }
   }
 
   const s = summarizeBulkRun(results);
@@ -1867,9 +1868,10 @@ async function uploadTaskToDrive() {
     return;
   }
 
+  // Guarded: the button is hidden by default (see renderer/index.html), so this
+  // lookup returns null unless someone has uncommented it.
   const btn = document.getElementById('drive-upload-btn');
-  btn.disabled = true;
-  btn.textContent = 'Uploading...';
+  if (btn) { btn.disabled = true; btn.textContent = 'Uploading...'; }
   try {
     const result = await window.app.driveUpload({ appFolderId: destFolderId, monthName, taskName, filePaths });
     if (result.error) {
@@ -1897,8 +1899,7 @@ async function uploadTaskToDrive() {
   } catch (err) {
     alert(`Upload failed — nothing written to Airtable.\n\n${err.message}`);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Upload to Drive';
+    if (btn) { btn.disabled = false; btn.textContent = 'Upload to Drive'; }
   }
 }
 
@@ -2332,8 +2333,11 @@ document.getElementById('bulk-drive-link-btn').addEventListener('click', () => {
   linkSelectedFromDrive();
 });
 
-document.getElementById('bulk-drive-upload-btn').addEventListener('click', () => {
-  if (document.getElementById('bulk-drive-upload-btn').disabled) return;
+// Drive upload is retained but hidden — see the note in renderer/index.html.
+// Guarded so the renderer still loads while the button is commented out.
+const bulkUploadBtn = document.getElementById('bulk-drive-upload-btn');
+if (bulkUploadBtn) bulkUploadBtn.addEventListener('click', () => {
+  if (bulkUploadBtn.disabled) return;
   uploadSelectedToDrive();
 });
 
@@ -2453,7 +2457,8 @@ document.getElementById('clear-files-btn').addEventListener('click', () => {
   renderFileList();
 });
 document.getElementById('rename-btn').addEventListener('click', performRename);
-document.getElementById('drive-upload-btn').addEventListener('click', uploadTaskToDrive);
+const driveUploadBtn = document.getElementById('drive-upload-btn');
+if (driveUploadBtn) driveUploadBtn.addEventListener('click', uploadTaskToDrive);
 document.getElementById('panel-autofill-btn').addEventListener('click', () => {
   if (document.getElementById('panel-autofill-btn').disabled) return;
   openAutofillModal();
