@@ -1257,14 +1257,26 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
   // the scratch folder used for testing is flat, <test>/<month>/<task>. Both are
   // handled by classifying what is actually present rather than assuming.
   const appWin = await openFolderForWork(appFolderId);
-  const { years, months } = classifyPeriodFolders(await readListingHere(appWin));
+  const rootItems = await readListingHere(appWin);
+  const { years, months } = classifyPeriodFolders(rootItems);
   const currentYear = String(monthYear || new Date().getFullYear());
-  logFn(`findFoldersByNames: ${taskNames.length} task(s) under ${appFolderId} — ${years.length} year folder(s), ${months.length} flat month folder(s)`);
+  logFn(`findFoldersByNames: ${taskNames.length} task(s) under ${appFolderId} — ${years.length} year folder(s), ${months.length} flat month folder(s), ${rootItems.length} item(s) total`);
 
   const matched = {};
   const duplicates = [];
   const searched = [];
   let remaining = taskNames.slice();
+
+  // The task folders may sit directly in the configured folder — that happens
+  // when the setting points at a month or year folder rather than the app root,
+  // and whenever the user drops folders straight into a scratch folder. This
+  // listing is already read, so checking it costs nothing.
+  const atRoot = matchTasksToFolders(remaining, rootItems);
+  Object.assign(matched, atRoot.matched);
+  for (const d of atRoot.duplicates) if (!duplicates.includes(d)) duplicates.push(d);
+  remaining = atRoot.unmatched;
+  searched.push('the folder itself');
+  logFn(`findFoldersByNames: folder itself -> matched ${Object.keys(atRoot.matched).length}, ${remaining.length} still missing`);
 
   // Searches one month folder. Returns true when every task has been decided.
   const searchMonth = async (folder, label) => {
@@ -1297,7 +1309,13 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
     }
   }
 
-  return { matched, duplicates, unmatched: remaining, searched };
+  // When something is still missing, hand back what the destination actually
+  // contains. A bare "not found" gives the user nothing to act on; the folder
+  // names do.
+  const sampleNames = remaining.length
+    ? rootItems.filter(i => i.isFolder).map(i => i.name).slice(0, 20)
+    : [];
+  return { matched, duplicates, unmatched: remaining, searched, sampleNames };
 }
 
 module.exports = {

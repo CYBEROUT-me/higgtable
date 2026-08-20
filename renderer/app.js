@@ -1684,7 +1684,12 @@ async function linkSelectedFromDrive() {
         continue;
       }
 
-      const where = res.searched && res.searched.length ? res.searched.join(', ') : 'no month folders found';
+      const where = res.searched && res.searched.length ? res.searched.join(', ') : 'nothing searchable found';
+      // Naming what IS in the destination turns "not found" into something the
+      // user can act on — usually a wrong folder configured in Settings.
+      const sample = (res.sampleNames && res.sampleNames.length)
+        ? `; that folder contains: ${res.sampleNames.join(', ')}`
+        : '';
       for (const p of group) {
         const folderId = res.matched[p.taskName];
         if (folderId) {
@@ -1692,7 +1697,7 @@ async function linkSelectedFromDrive() {
         } else if ((res.duplicates || []).includes(p.taskName)) {
           results.push({ task: p.taskName, error: `more than one folder named "${p.taskName}" \u2014 resolve it in Drive` });
         } else {
-          results.push({ task: p.taskName, error: `no folder named "${p.taskName}" (searched: ${where})` });
+          results.push({ task: p.taskName, error: `no folder named "${p.taskName}" (searched: ${where}${sample})` });
         }
       }
     }
