@@ -747,16 +747,21 @@ const SCROLL_TO_TOP_SCRIPT = `(() => {
 // appeared instead of paging to the end of a folder with hundreds of entries.
 async function exhaustListing(win, initial, stopWhen) {
   let items = initial;
-  if (typeof stopWhen === 'function' && stopWhen(items)) return items;
-
   const target = await execJS(win, 'mainCenter', MAIN_CENTER_SCRIPT).catch(() => null);
   if (!target) return items;
 
   const startRows = items.length;
   let noGrowth = 0;
   let sign = -1;   // flipped below if this direction turns out to be wrong
+  // Stopping the instant every wanted name is found would blind the duplicate
+  // guard to a second folder of the same name further down. Drive sorts by name,
+  // so identical names are ADJACENT — a couple of extra rounds after being
+  // satisfied is enough to see one, without paging the whole folder.
+  let grace = typeof stopWhen === 'function' && stopWhen(items) ? 2 : -1;
 
   for (let round = 0; round < 120 && noGrowth < 3; round++) {
+    if (grace === 0) break;
+    if (grace > 0) grace -= 1;
     // A burst per round: one wheel notch per iteration would need hundreds of
     // rounds to cross a large folder.
     for (let k = 0; k < 4; k++) {
@@ -774,7 +779,7 @@ async function exhaustListing(win, initial, stopWhen) {
     if (next.length > items.length) {
       items = next;
       noGrowth = 0;
-      if (typeof stopWhen === 'function' && stopWhen(items)) break;
+      if (grace < 0 && typeof stopWhen === 'function' && stopWhen(items)) grace = 2;
     } else {
       if (next.length) items = next;
       noGrowth += 1;
