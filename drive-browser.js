@@ -87,8 +87,18 @@ async function waitForSelector(win, selector, timeoutMs = 20000) {
 // Login state is determined from the settled URL, not the DOM: Google redirects
 // unauthenticated requests to accounts.google.com. That keeps this check immune
 // to UI changes.
-async function ensureLoggedIn() {
+async function ensureLoggedIn({ trustCurrentPage = false } = {}) {
   const win = getDriveWindow({ show: false });
+  const current = win.webContents.getURL();
+  // Loading My Drive purely to prove we are signed in cost a full page load per
+  // task AND moved the window off the folder the caller was about to use, so
+  // the next step had to navigate back. Already sitting on a drive.google.com
+  // page is proof enough, by the same redirect logic used below. If the session
+  // does expire mid-run, the next folder navigation redirects away and
+  // openFolderForWork reports it.
+  if (trustCurrentPage && current.startsWith('https://drive.google.com/') && !win.webContents.isLoading()) {
+    return { loggedIn: true, url: current };
+  }
   await loadAndWait(win, DRIVE_ROOT);
   const url = win.webContents.getURL();
   const loggedIn = url.startsWith('https://drive.google.com/');
@@ -149,10 +159,17 @@ async function navigateToFolder(folderId, { force = false } = {}) {
 // Opens a folder and waits for it to actually render. Drive intermittently
 // serves a blank page — the title updates but nothing else does — so a single
 // attempt is not enough to conclude the folder is unusable.
-async function openFolderForWork(folderId) {
+async function openFolderForWork(folderId, { force = false } = {}) {
   for (let attempt = 1; attempt <= 2; attempt++) {
-    await navigateToFolder(folderId, { force: true });
+    // Not forced on the first attempt: Drive updates its listing live — the
+    // post-upload read-back relies on exactly that — so a window already
+    // showing this folder is already current, and reloading it just burns a
+    // full SPA load. The retry forces, since that is the blank-page recovery.
+    const nav = await navigateToFolder(folderId, { force: force || attempt === 2 });
     const win = getDriveWindow();
+    if (nav.url && !nav.url.startsWith('https://drive.google.com/')) {
+      throw new Error(`Drive redirected to ${nav.url} — the Google session has expired; sign in again in the Drive window`);
+    }
     try {
       await waitForSelector(win, PROBES.mainRegion.selector, 20000);
       return win;
@@ -1064,7 +1081,7 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!monthName || !taskName || !localFolderPath) throw new Error('missing month, task name, or local folder');
 
-  const login = await ensureLoggedIn();
+  const login = await ensureLoggedIn({ trustCurrentPage: true });
   if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
 
   // A bulk run passes the month folder it already resolved. The answer cannot

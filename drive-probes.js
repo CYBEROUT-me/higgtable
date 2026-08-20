@@ -87,4 +87,21 @@ const PROBES = {
 // they are validated at their point of use instead.
 const PREFLIGHT_PROBES = ['mainRegion'];
 
+// MEASURED DEAD ENDS — do not rebuild these. Both were probed against the live
+// Drive on 2026-08-20 (probeMultiFolderUpload in drive-browser.js).
+//
+// Delivering several task folders in ONE action is not possible:
+//   * Chooser, array of paths: the folder chooser reports mode "selectSingle",
+//     and that is a hard limit. DOM.setFileInputFiles returned success for an
+//     array of 2 directory paths, then Chromium used only the FIRST — Drive
+//     reported "1 of 1" and exactly one folder landed. Success from
+//     setFileInputFiles says nothing about how many paths were honoured.
+//   * CDP drag and drop: Input.dispatchDragEvent accepted dragEnter, dragOver
+//     and drop with DragData.files = [dirPath, dirPath] and no error, but Drive
+//     ingested NOTHING — no progress dialog, no folders. Dropping directories
+//     this way does not produce the directory entries Drive's drop handler
+//     reads, so a hand-made drag works where a synthesized one cannot.
+// One Folder upload action per task folder is therefore the floor. Speed has to
+// come from cutting per-task overhead, not from batching.
+
 module.exports = { PROBES, PREFLIGHT_PROBES };
