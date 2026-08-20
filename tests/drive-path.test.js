@@ -109,3 +109,37 @@ test('partitionUploadFiles keeps extensionless files as deliverables', () => {
   expect(include).toEqual(['/t/README']);
   expect(excluded).toEqual([]);
 });
+
+const { buildFolderMap, parseMirrorCodes } = require('../renderer/drive-path');
+
+test('buildFolderMap maps mirror codes onto their base app folder', () => {
+  const map = buildFolderMap({ PL: 'plamfy-id', CMC: 'cmc-id' }, { PL: ['BL', 'XX'] });
+  expect(map.PL).toBe('plamfy-id');
+  expect(map.BL).toBe('plamfy-id');
+  expect(map.XX).toBe('plamfy-id');
+  expect(map.CMC).toBe('cmc-id');
+});
+
+test('buildFolderMap ignores mirrors of an unconfigured base, so they abort', () => {
+  const map = buildFolderMap({ CMC: 'cmc-id' }, { PL: ['BL'] });
+  expect(map.BL).toBeUndefined();
+  expect(map.PL).toBeUndefined();
+});
+
+test('buildFolderMap never lets a mirror override a real base entry', () => {
+  const map = buildFolderMap({ PL: 'plamfy-id', BL: 'its-own-id' }, { PL: ['BL'] });
+  expect(map.BL).toBe('its-own-id');
+});
+
+test('buildFolderMap tolerates missing arguments', () => {
+  expect(buildFolderMap(undefined, undefined)).toEqual({});
+  expect(buildFolderMap({ PL: 'x' }, undefined)).toEqual({ PL: 'x' });
+});
+
+test('parseMirrorCodes splits on commas and spaces, uppercases, dedupes', () => {
+  expect(parseMirrorCodes('BL, XX bl')).toEqual(['BL', 'XX']);
+  expect(parseMirrorCodes('  hc ')).toEqual(['HC']);
+  expect(parseMirrorCodes('')).toEqual([]);
+  expect(parseMirrorCodes(null)).toEqual([]);
+  expect(parseMirrorCodes('BL, !!, 9X')).toEqual(['BL', '9X']);
+});

@@ -63,6 +63,7 @@ const state = {
   workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
   driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
   driveAppFolders: {}, // { appCode: driveFolderId } for delivery destinations; missing/blank = uploads abort
+  driveAppMirrors: {}, // { baseCode: [mirrorCode] } — mirror apps deliver into their base app's folder
   driveIncludeProjectFiles: false, // ship .aep/.psd sources too; off while testing the automation
 };
 
@@ -220,6 +221,7 @@ async function boot() {
   state.workingDirectory = settings.workingDirectory || '';
   state.driveAccountIndex = settings.driveAccountIndex || '';
   state.driveAppFolders = settings.driveAppFolders || {};
+  state.driveAppMirrors = settings.driveAppMirrors || {};
   state.driveIncludeProjectFiles = settings.driveIncludeProjectFiles === true;
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
@@ -1597,7 +1599,9 @@ async function uploadTaskToDrive() {
   const taskName = rec.fields['Name'] || '';
 
   const code = appCodeFromTaskName(taskName);
-  const appFolderId = resolveAppFolderId(code, state.driveAppFolders);
+  // Mirror codes resolve to their base app's folder.
+  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
+  const appFolderId = resolveAppFolderId(code, folderMap);
   if (!appFolderId) {
     alert(`No Drive folder is configured for app code "${code || '(none)'}".\n\nAdd it in Settings → Drive Delivery Folders. Nothing was uploaded.`);
     return;
@@ -1619,8 +1623,11 @@ async function uploadTaskToDrive() {
     return;
   }
 
-  const allFiles = await window.app.findAssetFilesInFolder(sourceDir);
-  if (!allFiles.length) { alert(`No files found in ${sourceDir}`); return; }
+  // Selection-based: upload exactly the files listed in the rename panel, not
+  // everything sitting in the task folder. Folder-wide upload surprised users
+  // by including files left over from earlier runs.
+  const allFiles = state.pendingFiles.filter(f => !f.error).map(f => f.path);
+  if (!allFiles.length) { alert('No files selected — add files to the panel first.'); return; }
 
   // Project/source files ship only when the setting is on. Excluded files are
   // always listed below so it is never ambiguous what did and didn't go.
@@ -1631,11 +1638,14 @@ async function uploadTaskToDrive() {
   }
 
   const monthName = monthFolderName(toISO(new Date()));
-  const destination = `${DRIVE_APP_LABELS[code] || code} / ${monthName} / ${taskName}`;
+  // A mirror code has no label of its own; show the base app it delivers into.
+  const baseEntry = Object.entries(DRIVE_APP_LABELS).find(([b]) => state.driveAppFolders[b] === appFolderId);
+  const appLabel = DRIVE_APP_LABELS[code] || (baseEntry ? `${baseEntry[1]} (via ${code})` : code);
+  const destination = `${appLabel} / ${monthName} / ${taskName}`;
   const skipNote = excluded.length
     ? `\n\nNOT uploading ${excluded.length} project file(s):\n${excluded.map(p => p.split('/').pop()).join('\n')}`
     : '';
-  if (!confirm(`Upload ${filePaths.length} file(s) to Drive?\n\n${destination}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}${skipNote}`)) {
+  if (!confirm(`Upload ${filePaths.length} selected file(s) to Drive?\n\n${destination}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}${skipNote}`)) {
     return;
   }
 
@@ -1988,6 +1998,24 @@ function renderDriveAppFolderRows() {
       log(`drive-app-folders: ${code} -> ${state.driveAppFolders[code] || '(cleared)'}`);
     });
     row.appendChild(input);
+
+    // Mirror apps: different leading code, same destination folder.
+    const mirrors = document.createElement('input');
+    mirrors.type = 'text';
+    mirrors.className = 'drive-folder-mirrors';
+    mirrors.placeholder = 'mirrors';
+    mirrors.title = `Other task-name prefixes that should also deliver into ${label} — e.g. BL`;
+    mirrors.value = (state.driveAppMirrors[code] || []).join(', ');
+    mirrors.addEventListener('change', async () => {
+      const codes = parseMirrorCodes(mirrors.value);
+      if (codes.length) state.driveAppMirrors[code] = codes;
+      else delete state.driveAppMirrors[code];
+      mirrors.value = codes.join(', ');
+      await window.app.saveSettings({ driveAppMirrors: state.driveAppMirrors });
+      log(`drive-app-mirrors: ${code} -> ${JSON.stringify(codes)}`);
+    });
+    row.appendChild(mirrors);
+
     wrap.appendChild(row);
   });
 }

@@ -70,6 +70,38 @@ function partitionUploadFiles(filePaths, includeProjectFiles) {
   return { include, excluded };
 }
 
+
+// Mirror apps use a different leading code but deliver into the SAME folder as
+// their base app (e.g. BL alongside PL -> Plamfy_creatives). Combining them
+// into one lookup map keeps resolveAppFolderId unchanged.
+function buildFolderMap(baseFolders, mirrors) {
+  const map = { ...(baseFolders || {}) };
+  Object.entries(mirrors || {}).forEach(([base, codes]) => {
+    const id = (baseFolders || {})[base];
+    // A mirror of an unconfigured base resolves to nothing, so it aborts rather
+    // than silently delivering somewhere unintended.
+    if (!id) return;
+    (codes || []).forEach(raw => {
+      const code = String(raw).trim();
+      // Never override a real base entry: if a mirror code later becomes its
+      // own app with its own folder, that folder wins.
+      if (code && !map[code]) map[code] = id;
+    });
+  });
+  return map;
+}
+
+// Parses a free-text mirror field ("BL, XX bl") into unique uppercase codes.
+function parseMirrorCodes(input) {
+  if (typeof input !== 'string') return [];
+  const out = [];
+  input.split(/[\s,]+/).forEach(raw => {
+    const code = raw.trim().toUpperCase();
+    if (code && /^[A-Z0-9]+$/.test(code) && !out.includes(code)) out.push(code);
+  });
+  return out;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MONTH_NAMES,
@@ -79,5 +111,7 @@ if (typeof module !== 'undefined' && module.exports) {
     resolveAppFolderId,
     parseFolderIdFromUrl,
     partitionUploadFiles,
+    buildFolderMap,
+    parseMirrorCodes,
   };
 }
