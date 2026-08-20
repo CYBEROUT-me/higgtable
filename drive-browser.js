@@ -585,9 +585,13 @@ async function diagnose(folderId, opts = {}) {
 // Electron's executeJavaScript failure message ("Script failed to execute")
 // names neither the script nor the cause, which makes debugging blind. Wrap
 // each call with a label so a broken script identifies itself.
-async function execJS(win, label, script) {
+async function execJS(win, label, script, timeoutMs = 20000) {
   try {
-    return await win.webContents.executeJavaScript(script);
+    // executeJavaScript never settles when the renderer is wedged — the blank
+    // page state seen in the wild. Unbounded, that silently consumes the whole
+    // operation budget and reports nothing; bounded, it becomes a normal error
+    // the caller can retry or report.
+    return await withTimeout(win.webContents.executeJavaScript(script), timeoutMs, `page script "${label}"`);
   } catch (err) {
     throw new Error(`page script "${label}" failed: ${err.message}`);
   }
@@ -708,12 +712,22 @@ async function readListingHere(win, opts = {}) {
   const deadline = Date.now() + patienceMs;
   let previous = null;
   let items = [];
+  let readError = null;
   while (Date.now() < deadline) {
     await sleep(1500);
-    items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+    try {
+      items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+    } catch (err) {
+      // One wedged or slow read should not end the poll; the page may recover.
+      readError = err;
+      continue;
+    }
     const fingerprint = JSON.stringify(items.map(i => i.id).sort());
     if (items.length && fingerprint === previous) return items;
     previous = fingerprint;
+  }
+  if (readError && !items.length) {
+    throw new Error(`could not read the Drive listing: ${readError.message}`);
   }
   logFn(`readListingHere: read empty for ${Math.round(patienceMs / 1000)}s — treating it as an empty folder`);
   return items;
@@ -1245,6 +1259,13 @@ async function findFoldersByNames(args) {
   return inFlight;
 }
 
+// The upload path waits 30s before believing a folder is empty, because a wrong
+// "empty" there creates a DUPLICATE folder. Here a wrong "empty" only costs a
+// missed match, which is visible and recoverable — and the search may cross a
+// dozen month folders, so 30s each would blow the whole budget. With background
+// throttling disabled a real listing renders in a couple of seconds.
+const LINK_LISTING_PATIENCE_MS = 10000;
+
 async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNames }) {
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!Array.isArray(taskNames) || !taskNames.length) throw new Error('no task names to look up');
@@ -1257,7 +1278,7 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
   // the scratch folder used for testing is flat, <test>/<month>/<task>. Both are
   // handled by classifying what is actually present rather than assuming.
   const appWin = await openFolderForWork(appFolderId);
-  const rootItems = await readListingHere(appWin);
+  const rootItems = await readListingHere(appWin, { patienceMs: LINK_LISTING_PATIENCE_MS });
   const { years, months } = classifyPeriodFolders(rootItems);
   const currentYear = String(monthYear || new Date().getFullYear());
   logFn(`findFoldersByNames: ${taskNames.length} task(s) under ${appFolderId} — ${years.length} year folder(s), ${months.length} flat month folder(s), ${rootItems.length} item(s) total`);
@@ -1280,8 +1301,9 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
 
   // Searches one month folder. Returns true when every task has been decided.
   const searchMonth = async (folder, label) => {
+    logFn(`findFoldersByNames: opening ${label}`);
     const win = await openFolderForWork(folder.id);
-    const result = matchTasksToFolders(remaining, await readListingHere(win));
+    const result = matchTasksToFolders(remaining, await readListingHere(win, { patienceMs: LINK_LISTING_PATIENCE_MS }));
     Object.assign(matched, result.matched);
     for (const d of result.duplicates) if (!duplicates.includes(d)) duplicates.push(d);
     searched.push(label);
@@ -1301,8 +1323,9 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
 
   for (const year of yearSearchOrder(years, currentYear)) {
     if (!remaining.length) break;
+    logFn(`findFoldersByNames: descending into year ${year.name}`);
     const yearWin = await openFolderForWork(year.id);
-    const yearMonths = monthSearchOrder(await readListingHere(yearWin), monthName);
+    const yearMonths = monthSearchOrder(await readListingHere(yearWin, { patienceMs: LINK_LISTING_PATIENCE_MS }), monthName);
     for (const m of yearMonths) {
       if (!remaining.length) break;
       if (await searchMonth(m, `${year.name}/${m.name}`)) break;
