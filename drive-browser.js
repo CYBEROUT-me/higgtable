@@ -982,6 +982,65 @@ const PROGRESS_SCRIPT = `(() => {
 })()`;
 
 // ---------------------------------------------------------------------------
+const ROW_DUMP_SCRIPT = '(() => {' +
+  'const NL = String.fromCharCode(10);' +
+  'const attrs = (el) => {' +
+  '  const o = {};' +
+  '  for (const a of el.attributes) o[a.name] = (a.value || "").slice(0, 80);' +
+  '  return o;' +
+  '};' +
+  'const inner = (el) => [...el.querySelectorAll("[aria-label]")].slice(0, 4).map(d => ({' +
+  '  tag: d.tagName, role: d.getAttribute("role"),' +
+  '  ariaLabel: (d.getAttribute("aria-label") || "").slice(0, 90)' +
+  '}));' +
+  'const svgHref = (el) => {' +
+  '  const u = el.querySelector("svg use, svg image, img");' +
+  '  if (!u) return null;' +
+  '  return (u.getAttribute("href") || u.getAttribute("xlink:href") || u.getAttribute("src") || "").slice(0, 120);' +
+  '};' +
+  'const dump = (el) => ({' +
+  '  tag: el.tagName, role: el.getAttribute("role"),' +
+  '  firstLine: (el.innerText || "").split(NL)[0].slice(0, 60),' +
+  '  ownAria: el.getAttribute("aria-label"),' +
+  '  attrs: attrs(el),' +
+  '  innerAria: inner(el),' +
+  '  icon: svgHref(el),' +
+  '  ancestorAria: (() => {' +
+  '    let n = el.parentElement, out = [];' +
+  '    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {' +
+  '      const a = n.getAttribute("aria-label");' +
+  '      if (a) out.push({ tag: n.tagName, role: n.getAttribute("role"), ariaLabel: a.slice(0, 90) });' +
+  '    }' +
+  '    return out;' +
+  '  })()' +
+  '});' +
+  'return {' +
+  '  gridcells: [...document.querySelectorAll("[role=gridcell]")].slice(0, 6).map(dump),' +
+  '  withDataId: [...document.querySelectorAll("[data-id]")].slice(0, 8).map(dump)' +
+  '};' +
+  '})()';
+
+// DIAGNOSTIC ONLY, read-only. Dumps how Drive marks up item rows in a specific
+// folder. Needed because folder-vs-file detection currently reads aria-label,
+// and a shared folder was observed rendering rows with NO aria-label at all —
+// making every item look like a file. Run this in a folder that works and one
+// that does not, then compare to find a discriminator that holds in both.
+async function probeItemRows(folderId) {
+  if (!folderId) throw new Error('probeItemRows needs a folder id');
+  const login = await ensureLoggedIn({ trustCurrentPage: true });
+  if (!login.loggedIn) return { error: 'not signed in to Google' };
+  const win = await openFolderForWork(folderId, { force: true });
+  const items = await readListingHere(win, { patienceMs: LINK_LISTING_PATIENCE_MS }).catch(e => ({ error: e.message }));
+  const dump = await execJS(win, 'rowDump', ROW_DUMP_SCRIPT);
+  return {
+    folderId,
+    url: win.webContents.getURL(),
+    title: win.webContents.getTitle(),
+    parsedByCurrentCode: items,
+    dump,
+  };
+}
+
 // DIAGNOSTIC ONLY. Answers, against the user's live Drive, whether several task
 // folders can be delivered in ONE action instead of one action per task. Two
 // candidates, cheapest first:
@@ -1353,6 +1412,7 @@ module.exports = {
   preflight,
   readListingHere,
   probeMultiFolderUpload,
+  probeItemRows,
   openFolderForWork,
   listFolderItems,
   listFolderFileNames,

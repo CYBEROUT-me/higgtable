@@ -357,6 +357,16 @@ ipcMain.handle('drive-probe-multi-upload', async (_e, folderId, folderPaths, mod
   }
 });
 
+ipcMain.handle('drive-probe-rows', async (_e, folderId) => {
+  try {
+    log(`drive-probe-rows: ${folderId}`);
+    return await driveBrowser.probeItemRows(folderId);
+  } catch (err) {
+    log(`drive-probe-rows FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('drive-find-folders', async (_e, payload) => {
   try {
     log(`drive-find-folders: ${((payload && payload.taskNames) || []).length} task(s) under ${payload && payload.appFolderId}`);
