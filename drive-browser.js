@@ -945,6 +945,118 @@ const PROGRESS_SCRIPT = `(() => {
   return null;
 })()`;
 
+// ---------------------------------------------------------------------------
+// DIAGNOSTIC ONLY. Answers, against the user's live Drive, whether several task
+// folders can be delivered in ONE action instead of one action per task. Two
+// candidates, cheapest first:
+//   'chooser' — hand DOM.setFileInputFiles an ARRAY of directory paths through
+//     the already-proven New -> Folder upload path. Drive reports the chooser
+//     as mode "selectSingle", but that is Drive's hint, not a hard limit of the
+//     protocol call, so it is worth measuring before building anything new.
+//   'drag' — CDP Input.dispatchDragEvent with DragData.files. Closer to what a
+//     human does, but it is unknown whether Chromium turns dropped directory
+//     paths into the directory entries Drive's drop handler reads.
+// This UPLOADS into whatever folder id it is given. Point it at a scratch
+// folder, never a client folder. It never touches Airtable.
+async function probeMultiFolderUpload(folderId, folderPaths, mode = 'chooser') {
+  if (!folderId) throw new Error('probeMultiFolderUpload needs a destination folder id');
+  if (!Array.isArray(folderPaths) || folderPaths.length < 2) {
+    throw new Error('pass at least two local folder paths — one proves nothing about batching');
+  }
+  for (const fp of folderPaths) {
+    if (!fs.existsSync(fp) || !fs.statSync(fp).isDirectory()) throw new Error(`not a directory: ${fp}`);
+  }
+
+  const login = await ensureLoggedIn();
+  if (!login.loggedIn) return { error: 'not signed in to Google' };
+
+  const win = await openFolderForWork(folderId);
+  win.webContents.focus();
+  const before = (await readListingHere(win)).map(i => i.name);
+  const result = { mode, folderId, attempted: folderPaths.length, before };
+
+  if (mode === 'chooser') {
+    await withDebugger(win, async (dbg) => {
+      let chooser = null;
+      const onMessage = (_e, method, params) => {
+        if (method === 'Page.fileChooserOpened') chooser = params;
+      };
+      dbg.on('message', onMessage);
+      try {
+        await dbg.sendCommand('Page.enable');
+        await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+        await execJS(win, 'click:new', clickByTextScript(PROBES.newButton.text));
+        await sleep(1500);
+        const item = await execJS(win, 'locate:folderUpload',
+          locateByTextScript(PROBES.menuItemFolderUpload.text, '[role=menuitem]'));
+        if (!item) { result.error = 'no "Folder upload" menu item'; return; }
+        await realClickAt(win, item);
+        const deadline = Date.now() + 15000;
+        while (!chooser && Date.now() < deadline) await sleep(300);
+        if (!chooser) { result.error = 'chooser never opened'; return; }
+        result.chooserMode = chooser.mode;
+        try {
+          const r = await dbg.sendCommand('DOM.setFileInputFiles', {
+            files: folderPaths,
+            backendNodeId: chooser.backendNodeId,
+          });
+          result.setFilesAccepted = true;
+          result.setFilesResult = r || null;
+        } catch (err) {
+          result.setFilesAccepted = false;
+          result.setFilesError = String(err && err.message);
+        }
+      } finally {
+        dbg.removeListener('message', onMessage);
+        try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch (e) { /* best effort */ }
+      }
+    });
+  } else if (mode === 'drag') {
+    const rect = await execJS(win, 'mainRect', `(() => {
+      const el = document.querySelector(${JSON.stringify(PROBES.mainRegion.selector)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`);
+    if (!rect) return { ...result, error: 'could not locate the drop target' };
+    result.dropPoint = rect;
+    await withDebugger(win, async (dbg) => {
+      const data = { items: [], files: folderPaths, dragOperationsMask: 1 };
+      for (const type of ['dragEnter', 'dragOver', 'drop']) {
+        try {
+          await dbg.sendCommand('Input.dispatchDragEvent', { type, x: rect.x, y: rect.y, data });
+          result[type] = 'ok';
+        } catch (err) {
+          result[type] = String(err && err.message);
+          result.error = `Input.dispatchDragEvent(${type}) failed`;
+          return;
+        }
+        await sleep(600);
+      }
+    });
+  } else {
+    return { ...result, error: `unknown probe mode "${mode}"` };
+  }
+
+  // Did Drive actually start ingesting anything?
+  const progress = [];
+  const watchUntil = Date.now() + 45000;
+  while (Date.now() < watchUntil) {
+    const p = await execJS(win, 'uploadProgress', PROGRESS_SCRIPT).catch(() => null);
+    if (p) {
+      const last = progress[progress.length - 1];
+      if (!last || last.done !== p.done || last.total !== p.total) progress.push(p);
+      if (p.done >= p.total) break;
+    }
+    await sleep(2000);
+  }
+  result.progress = progress;
+  result.after = (await readListingHere(win, { patienceMs: 20000 })).map(i => i.name);
+  result.landed = result.after.filter(n => !before.includes(n));
+  logFn(`probeMultiFolderUpload(${mode}): landed ${result.landed.length}/${folderPaths.length}`);
+  return result;
+}
+
 // Uploads a whole local folder via New -> Folder upload. Drive creates the task
 // folder itself, which removes the New-folder dialog — the most failure-prone
 // part of the single-file path. Only the MONTH folder is find-or-created here.
@@ -1107,6 +1219,7 @@ module.exports = {
   setLogger,
   preflight,
   readListingHere,
+  probeMultiFolderUpload,
   openFolderForWork,
   listFolderItems,
   listFolderFileNames,

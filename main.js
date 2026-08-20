@@ -347,6 +347,16 @@ ipcMain.handle('drive-upload', async (_e, payload) => {
   }
 });
 
+ipcMain.handle('drive-probe-multi-upload', async (_e, folderId, folderPaths, mode) => {
+  try {
+    log(`drive-probe-multi-upload: ${mode} x${(folderPaths || []).length} -> ${folderId}`);
+    return await driveBrowser.probeMultiFolderUpload(folderId, folderPaths, mode);
+  } catch (err) {
+    log(`drive-probe-multi-upload FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('drive-upload-folder', async (_e, payload) => {
   try {
     log(`drive-upload-folder: ${payload && payload.taskName}`);
