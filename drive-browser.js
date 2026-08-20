@@ -41,6 +41,12 @@ function getDriveWindow({ show = false } = {}) {
       partition: PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
+      // Chromium throttles timers and suspends rendering in hidden or occluded
+      // windows. Drive's grid then never populates, so listings read empty and
+      // uploads appear to stall whenever this window is not in front — which is
+      // most of a bulk run. Without this the automation only works while the
+      // user keeps the window visible.
+      backgroundThrottling: false,
     },
   });
   driveWin.on('closed', () => { driveWin = null; });
@@ -638,13 +644,12 @@ const LIST_ITEMS_SCRIPT = `(() => {
 // duplicate folder and a failed run.
 const LISTING_PATIENCE_MS = 30000;
 
-async function listFolderItems(folderId, opts = {}) {
+// Reads the listing of the folder the window is ALREADY showing. Navigation is
+// by far the expensive part of a Drive read, and Drive updates its listing
+// live, so callers already on the right page should poll here rather than
+// reload.
+async function readListingHere(win, opts = {}) {
   const patienceMs = opts.patienceMs != null ? opts.patienceMs : LISTING_PATIENCE_MS;
-  logFn(`listFolderItems: ${folderId}${opts.force ? ' (forced reload)' : ''}`);
-  await navigateToFolder(folderId, opts);
-  const win = getDriveWindow({ show: false });
-  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
-
   const deadline = Date.now() + patienceMs;
   let previous = null;
   let items = [];
@@ -655,8 +660,16 @@ async function listFolderItems(folderId, opts = {}) {
     if (items.length && fingerprint === previous) return items;
     previous = fingerprint;
   }
-  logFn(`listFolderItems: ${folderId} read empty for ${Math.round(patienceMs / 1000)}s — treating it as an empty folder`);
+  logFn(`readListingHere: read empty for ${Math.round(patienceMs / 1000)}s — treating it as an empty folder`);
   return items;
+}
+
+async function listFolderItems(folderId, opts = {}) {
+  logFn(`listFolderItems: ${folderId}${opts.force ? ' (forced reload)' : ''}`);
+  await navigateToFolder(folderId, opts);
+  const win = getDriveWindow({ show: false });
+  await waitForSelector(win, PROBES.mainRegion.selector, 15000);
+  return readListingHere(win, opts);
 }
 
 async function listFolderFileNames(folderId) {
@@ -909,35 +922,39 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   const login = await ensureLoggedIn();
   if (!login.loggedIn) throw new Error('not signed in to Google — sign in the Drive window, then retry');
 
-  const appNav = await navigateToFolder(appFolderId);
-  if (appNav.folderId !== appFolderId) {
-    throw new Error(`configured app folder ${appFolderId} is not reachable — check the Settings URL`);
-  }
-  const pre = await preflight();
-  if (!pre.ok) {
-    throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}`);
-  }
-
   // A bulk run passes the month folder it already resolved. The answer cannot
   // change between tasks in one run, and every extra find-or-create is another
   // chance to misread a slow listing and create a duplicate month folder.
-  const monthId = monthFolderId || await findOrCreateFolder(appFolderId, monthName);
+  // Reaching the destination and preflighting the UI are proved by that first
+  // task too, and each is a full SPA reload, so later tasks skip both.
+  let monthId = monthFolderId;
+  if (!monthId) {
+    const appNav = await navigateToFolder(appFolderId);
+    if (appNav.folderId !== appFolderId) {
+      throw new Error(`configured app folder ${appFolderId} is not reachable — check the Settings URL`);
+    }
+    const pre = await preflight();
+    if (!pre.ok) {
+      throw new Error(`Drive UI has changed; aborted before uploading. Failing probes: ${pre.failures.join(', ')}`);
+    }
+    monthId = await findOrCreateFolder(appFolderId, monthName);
+  }
   logFn(`uploadFolderToDrive: month ${monthName} -> ${monthId}${monthFolderId ? ' (reused)' : ''}`);
 
-  // Folder upload cannot merge into an existing folder — it would create a
-  // second one with the same name. Refuse rather than duplicate.
-  const already = (await listFolderItems(monthId, { force: true }))
-    .filter(i => i.isFolder && i.name === taskName);
-  if (already.length) {
-    throw new Error(`"${taskName}" already exists in ${monthName}; Folder upload would create a duplicate rather than merge. Delete it first, or use the single-task upload.`);
-  }
-
+  // ONE navigation serves both the duplicate check and the upload: the check
+  // reads the very page the upload is about to act on.
   await navigateToFolder(monthId, { force: true });
   const win = getDriveWindow({ show: true });
   win.focus();
   win.webContents.focus();
   await waitForSelector(win, PROBES.mainRegion.selector, 15000);
-  await sleep(1200);
+
+  // Folder upload cannot merge into an existing folder — it would create a
+  // second one with the same name. Refuse rather than duplicate.
+  const already = (await readListingHere(win)).filter(i => i.isFolder && i.name === taskName);
+  if (already.length) {
+    throw new Error(`"${taskName}" already exists in ${monthName}; Folder upload would create a duplicate rather than merge. Delete it first, or use the single-task upload.`);
+  }
 
   await withDebugger(win, async (dbg) => {
     let chooser = null;
@@ -999,14 +1016,26 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
     await sleep(5000);
   }
 
-  // Read back the folder Drive created; the link comes from the URL.
+  // Read back the folder Drive created; the link comes from the URL. Poll the
+  // page we are already on — Drive adds the uploaded folder to the live
+  // listing, so the old force-reload-per-attempt cost seconds each time and
+  // kept discarding a rendered grid. That is what reported "read back 0
+  // folders" for folders that had in fact uploaded correctly. Finding the name
+  // is positive evidence, so unlike concluding absence it needs no settling.
   let found = [];
-  const readDeadline = Date.now() + 60000;
+  const readDeadline = Date.now() + 120000;
   while (Date.now() < readDeadline) {
-    await sleep(3000);
+    await sleep(2000);
+    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    found = items.filter(i => i.isFolder && i.name === taskName).map(i => i.id);
+    if (found.length) break;
+  }
+  if (!found.length) {
+    // Last resort before failing a task whose files may well have arrived:
+    // maybe the live listing never refreshed. Reload once and look again.
+    logFn(`uploadFolderToDrive: "${taskName}" not in the live listing after 120s — reloading once`);
     found = (await listFolderItems(monthId, { force: true }))
       .filter(i => i.isFolder && i.name === taskName).map(i => i.id);
-    if (found.length) break;
   }
   if (found.length !== 1) {
     throw new Error(`uploaded but read back ${found.length} folders named "${taskName}" — Creative Link not written`);
@@ -1027,6 +1056,7 @@ module.exports = {
   withDebugger,
   setLogger,
   preflight,
+  readListingHere,
   listFolderItems,
   listFolderFileNames,
   findChildFoldersByName,
