@@ -4,6 +4,7 @@ const {
   resolveAppFolderId,
   parseFolderIdFromUrl,
   partitionUploadFiles,
+  isFolderFromLabels,
 } = require('../renderer/drive-path');
 
 test('appCodeFromTaskName takes the first underscore-separated token', () => {
@@ -142,4 +143,52 @@ test('parseMirrorCodes splits on commas and spaces, uppercases, dedupes', () => 
   expect(parseMirrorCodes('')).toEqual([]);
   expect(parseMirrorCodes(null)).toEqual([]);
   expect(parseMirrorCodes('BL, !!, 9X')).toEqual(['BL', '9X']);
+});
+
+// Real aria-labels captured from the user's live Drive on 2026-08-20. The
+// owned/shared difference is what broke folder detection in every shared client
+// folder, so it is pinned here.
+describe('isFolderFromLabels', () => {
+  test('detects a folder you own', () => {
+    expect(isFolderFromLabels('2026', '2026 Folder More info (Option + \u2192)')).toBe(true);
+  });
+
+  test('detects a folder shared with you', () => {
+    expect(isFolderFromLabels('2026', '2026 Shared folder More info (Option + \u2192)')).toBe(true);
+  });
+
+  test('handles a shared folder whose name contains a space', () => {
+    expect(isFolderFromLabels('OLD Creo', 'OLD Creo Shared folder More info (Option + \u2192)')).toBe(true);
+  });
+
+  test('detects a task folder shared with you', () => {
+    const n = 'HC_1952_1952_A0_S0_EN_usr_ALB_PRI_Stat_NEW_9x16';
+    expect(isFolderFromLabels(n, n + ' Shared folder More info (Option + \u2192)')).toBe(true);
+  });
+
+  test('works without the "More info" suffix', () => {
+    expect(isFolderFromLabels('Test folder', 'Test folder Folder')).toBe(true);
+  });
+
+  test('does not treat a file as a folder', () => {
+    expect(isFolderFromLabels('a.png', 'a.png PNG image More info (Option + \u2192)')).toBe(false);
+  });
+
+  test('a FILE whose name ends in "folder" is still a file', () => {
+    expect(isFolderFromLabels('My folder.png', 'My folder.png PNG image More info')).toBe(false);
+  });
+
+  test('a folder named "My folder" is still a folder', () => {
+    expect(isFolderFromLabels('My folder', 'My folder Folder More info')).toBe(true);
+  });
+
+  test('falls back to the tooltip when aria-label is missing', () => {
+    expect(isFolderFromLabels('2026', '', '2026 Shared folder')).toBe(true);
+    expect(isFolderFromLabels('a.png', '', 'a.png PNG image')).toBe(false);
+  });
+
+  test('never guesses folder with no label at all', () => {
+    expect(isFolderFromLabels('2026', '', '')).toBe(false);
+    expect(isFolderFromLabels('2026', null, null)).toBe(false);
+  });
 });

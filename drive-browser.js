@@ -16,6 +16,7 @@ const { PROBES, PREFLIGHT_PROBES } = require('./drive-probes');
 const {
   matchTasksToFolders, monthSearchOrder, classifyPeriodFolders, yearSearchOrder,
 } = require('./renderer/drive-link');
+const { isFolderFromLabels } = require('./renderer/drive-path');
 
 const PARTITION = 'persist:gdrive';
 const DRIVE_ROOT = 'https://drive.google.com/drive/my-drive';
@@ -673,21 +674,26 @@ async function preflight() {
 // Lists the children of the currently-open folder view.
 const LIST_ITEMS_SCRIPT = `(() => {
   return [...document.querySelectorAll(${JSON.stringify(PROBES.itemRow.selector)})].map(el => {
-    const aria = (el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
-    const name = (el.innerText || '').split('\\n')[0].trim();
-    // Drive labels items "<name> <TypeWord> [More info ...]". Strip the name and
-    // read the type word. An endsWith(' Folder') test fails whenever "More info"
-    // is appended, and a contains(' Folder') test would wrongly match a file
-    // called "My Folder.png" — this handles both.
-    const rest = aria.startsWith(name) ? aria.slice(name.length).trim() : aria;
+    const tip = el.querySelector('[data-tooltip-class]');
     return {
       id: el.getAttribute(${JSON.stringify(PROBES.itemRow.idAttribute)}),
-      name,
-      isFolder: rest.startsWith('Folder'),
-      aria,
+      name: (el.innerText || '').split('\\n')[0].trim(),
+      // The page script only REPORTS labels. Deciding folder-vs-file from them
+      // happens in Node, in isFolderFromLabels, where it is unit-tested against
+      // real captured aria-labels — three separate bugs came from that decision
+      // living here, untestable, and being derived from a single sample.
+      aria: (el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim(),
+      tooltip: tip ? (tip.getAttribute('data-tooltip') || '').replace(/\\s+/g, ' ').trim() : '',
     };
   }).filter(i => i.id && i.name);
 })()`;
+
+// Reads the raw rows and applies the tested folder test. Every listing read goes
+// through here so the two can never drift apart.
+async function readItems(win) {
+  const raw = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+  return raw.map(i => ({ ...i, isFolder: isFolderFromLabels(i.name, i.aria, i.tooltip) }));
+}
 
 // Reading a Drive listing has two distinct hazards, and getting either wrong
 // creates duplicate folders:
@@ -716,7 +722,7 @@ async function readListingHere(win, opts = {}) {
   while (Date.now() < deadline) {
     await sleep(1500);
     try {
-      items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+      items = await readItems(win);
     } catch (err) {
       // One wedged or slow read should not end the poll; the page may recover.
       readError = err;
@@ -832,13 +838,13 @@ async function findOrCreateFolder(parentId, name) {
   const deadline = Date.now() + 25000;
   while (Date.now() < deadline) {
     await sleep(2000);
-    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT);
+    const items = await readItems(win);
     after = items.filter(i => i.isFolder && i.name === name).map(i => i.id);
     if (after.length) break;
   }
 
   if (after.length !== 1) {
-    const all = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(e => ({ err: e.message }));
+    const all = await readItems(win).catch(e => ({ err: e.message }));
     const state = await pageState(win);
     throw new Error(`Created "${name}" but read back ${after.length} matches.\nItems seen: ${JSON.stringify(all)}\nPage state: ${JSON.stringify(state)}`);
   }
@@ -956,7 +962,7 @@ async function doDeliver({ appFolderId, monthName, taskName, filePaths }) {
   const deadline = Date.now() + 90000;
   while (missing.length && Date.now() < deadline) {
     await sleep(3000);
-    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    const items = await readItems(win).catch(() => []);
     const present = items.filter(i => !i.isFolder).map(i => i.name);
     missing = expected.filter(n => !present.includes(n));
     if (missing.length) logFn(`deliver: waiting on ${missing.length} file(s)`);
@@ -1280,7 +1286,7 @@ async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFold
   const readDeadline = Date.now() + 120000;
   while (Date.now() < readDeadline) {
     await sleep(2000);
-    const items = await execJS(win, 'listItems', LIST_ITEMS_SCRIPT).catch(() => []);
+    const items = await readItems(win).catch(() => []);
     found = items.filter(i => i.isFolder && i.name === taskName).map(i => i.id);
     if (found.length) break;
   }

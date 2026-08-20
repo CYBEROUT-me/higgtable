@@ -102,6 +102,28 @@ function parseMirrorCodes(input) {
   return out;
 }
 
+
+// Drive labels an item row "<name> <Type> More info (Option + ...)". The type
+// phrase for a folder is "Folder" when you own it and "Shared folder" when it is
+// shared with you — a distinction that made every item inside a shared client
+// folder read as a file, so no month or task folder could ever be found.
+//
+// Trust only the LAST word of the type phrase. That accepts any "... folder"
+// variant Drive invents, while a FILE called "My folder.png" still reads as a
+// file because its type phrase ends in "image". Derived from live aria-labels
+// captured on 2026-08-20; samples are recorded in drive-probes.js.
+function isFolderFromLabels(name, aria, tooltip) {
+  const source = String(aria || '') || String(tooltip || '');
+  if (!source) return false;
+  const n = String(name || '');
+  let rest = source.startsWith(n) ? source.slice(n.length) : source;
+  const cut = rest.indexOf('More info');
+  if (cut >= 0) rest = rest.slice(0, cut);
+  const words = rest.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  return words[words.length - 1].toLowerCase() === 'folder';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MONTH_NAMES,
@@ -113,5 +135,6 @@ if (typeof module !== 'undefined' && module.exports) {
     partitionUploadFiles,
     buildFolderMap,
     parseMirrorCodes,
-  };
+  isFolderFromLabels,
+};
 }

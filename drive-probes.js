@@ -36,6 +36,14 @@ const PROBES = {
     // An endsWith(' Folder') test breaks when "More info" is appended, and a
     // contains(' Folder') test wrongly matches a file named "My Folder.png".
     folderTypeWord: 'Folder',
+    // Captured 2026-08-20. The type phrase differs by ownership, which is why
+    // folder detection lives in isFolderFromLabels (renderer/drive-path.js,
+    // unit-tested) and reads only the LAST word of the phrase:
+    //   owned:  '2026 Folder More info (Option + \u2192)'
+    //   shared: '2026 Shared folder More info (Option + \u2192)'
+    // A child element also carries data-tooltip ('2026 Shared folder'), used
+    // as a fallback when aria-label is absent.
+    typePhraseSamples: ['Folder', 'Shared folder'],
   },
 
   // Two buttons read "New"; one is 0x0. Must filter to visible.
