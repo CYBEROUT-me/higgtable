@@ -1368,14 +1368,19 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
   const searchMonth = async (folder, label) => {
     logFn(`findFoldersByNames: opening ${label}`);
     const win = await openFolderForWork(folder.id);
-    const result = matchTasksToFolders(remaining, await readListingHere(win, { patienceMs: LINK_LISTING_PATIENCE_MS }));
+    const items = await readListingHere(win, { patienceMs: LINK_LISTING_PATIENCE_MS });
+    const folderCount = items.filter(i => i.isFolder).length;
+    const result = matchTasksToFolders(remaining, items);
     Object.assign(matched, result.matched);
     for (const d of result.duplicates) if (!duplicates.includes(d)) duplicates.push(d);
     searched.push(label);
     // A duplicate is a decided outcome, not something to keep hunting for, so
     // only the genuinely unmatched names carry into the next month folder.
     remaining = result.unmatched;
-    logFn(`findFoldersByNames: ${label} -> matched ${Object.keys(result.matched).length}, ${remaining.length} still missing`);
+    // The item counts distinguish "this folder was read and does not contain the
+    // name" from "this folder read as empty" — otherwise a miss looks identical
+    // to a failed read.
+    logFn(`findFoldersByNames: ${label} -> ${items.length} item(s) (${folderCount} folder(s)), matched ${Object.keys(result.matched).length}, ${remaining.length} still missing`);
     return remaining.length === 0;
   };
 
