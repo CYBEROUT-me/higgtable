@@ -404,6 +404,54 @@ ipcMain.handle('find-asset-files', (_e, dir, filenames) => {
   return found;
 });
 
+// Finds a directory whose basename EXACTLY equals `name`, anywhere under `dir`.
+// Exact match only: delivering into a similarly-named folder would put one
+// task's files under another task's name.
+function findDirByExactName(dir, name) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.name === name) return full;
+    const nested = findDirByExactName(full, name);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+ipcMain.handle('find-task-folder', (_e, dir, name) => {
+  if (!dir || !name) return null;
+  return findDirByExactName(dir, name);
+});
+
+// Deletes ONLY files named exactly ".DS_Store", ONLY inside `folderPath`, and
+// ONLY when that folder sits inside `workingDir`. Drive's Folder upload cannot
+// filter, so this is the one place the feature writes to disk — it is
+// deliberately narrow, and every deletion is logged.
+ipcMain.handle('strip-ds-store', (_e, folderPath, workingDir) => {
+  const target = path.resolve(folderPath || '');
+  const root = path.resolve(workingDir || '');
+  if (!target || !root || !(target === root || target.startsWith(root + path.sep))) {
+    return { error: `refusing to touch ${target}: outside the working directory` };
+  }
+  const deleted = [];
+  const walk = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === '.DS_Store') {
+        try { fs.unlinkSync(full); deleted.push(full); log(`strip-ds-store: deleted ${full}`); }
+        catch (err) { log(`strip-ds-store: could not delete ${full} — ${err.message}`); }
+      }
+    }
+  };
+  walk(target);
+  return { deleted };
+});
+
 // For the Autofill approval modal — lets it show a thumbnail before upload.
 ipcMain.handle('read-image-data-url', (_e, filePath) => {
   const ext = path.extname(filePath).toLowerCase();

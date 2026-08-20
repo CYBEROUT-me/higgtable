@@ -34,4 +34,6 @@ contextBridge.exposeInMainWorld('app', {
   driveDiagnose:     (folderId, o) => ipcRenderer.invoke('drive-diagnose', folderId, o),
   driveUpload:       (payload)     => ipcRenderer.invoke('drive-upload', payload),
   findAssetFilesInFolder: (dir)    => ipcRenderer.invoke('find-asset-files-in-folder', dir),
+  findTaskFolder:    (dir, name)   => ipcRenderer.invoke('find-task-folder', dir, name),
+  stripDsStore:      (p, root)     => ipcRenderer.invoke('strip-ds-store', p, root),
 });
