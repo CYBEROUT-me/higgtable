@@ -1601,6 +1601,123 @@ const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 // Bulk delivery: each selected task's local folder is uploaded whole via Drive's
 // Folder upload. Tasks run sequentially (the chooser is selectSingle) and each
 // commits independently — one failure never discards the others' work.
+// Links tasks to folders the user has ALREADY uploaded to Drive by hand. Reads
+// Drive, never writes to it. A link reaches Airtable only for an exact,
+// unambiguous folder-name match.
+async function linkSelectedFromDrive() {
+  if (!state.selectedIds.size) return;
+
+  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
+  if (!records.length) return;
+
+  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
+  const monthName = monthFolderName(toISO(new Date()));
+
+  const candidates = records.map(rec => {
+    const taskName = rec.fields['Name'];
+    const code = appCodeFromTaskName(taskName);
+    return {
+      recordId: rec.id,
+      taskName,
+      code,
+      appFolderId: resolveAppFolderId(code, folderMap),
+      existingLink: rec.fields['Creative Link'],
+    };
+  });
+
+  if (state.driveTestMode && !state.driveTestFolderId) {
+    alert('Test mode is on but no test folder is set (Settings \u2192 Drive Delivery Folders).');
+    return;
+  }
+
+  const { plans, skipped } = planLinkRun({
+    candidates,
+    testFolderId: state.driveTestFolderId,
+    testMode: state.driveTestMode,
+  });
+
+  if (!plans.length) {
+    alert(`Nothing to link.\n\n${skipped.map(s => `  ${s.taskName} \u2014 ${s.reason}`).join('\n')}`);
+    return;
+  }
+
+  const lines = [
+    ...plans.map(p => `  ${p.taskName}  ->  look up in ${monthName}`),
+    ...skipped.map(s => `  ${s.taskName}  ->  SKIP (${s.reason})`),
+  ];
+  const banner = state.driveTestMode
+    ? 'TEST MODE \u2014 reading the test folder and NOT writing Creative Link.\n\n'
+    : '';
+  if (!confirm(`${banner}Look up ${plans.length} task folder(s) in Drive and fill Creative Link?\n\n${lines.join('\n')}`)) return;
+
+  // One lookup per destination, so a folder is read once no matter how many
+  // tasks point at it.
+  const byDest = {};
+  for (const p of plans) (byDest[p.destFolderId] = byDest[p.destFolderId] || []).push(p);
+
+  const btn = document.getElementById('bulk-drive-link-btn');
+  if (btn) btn.disabled = true;
+  const results = [...skipped.map(s => ({ task: s.taskName, skipped: s.reason }))];
+  const writes = [];
+
+  try {
+    const dests = Object.keys(byDest);
+    for (let i = 0; i < dests.length; i++) {
+      const dest = dests[i];
+      const group = byDest[dest];
+      if (btn) btn.textContent = `Looking up ${i + 1}/${dests.length}...`;
+
+      const res = await window.app.driveFindFolders({
+        appFolderId: dest,
+        monthName,
+        taskNames: group.map(p => p.taskName),
+      });
+
+      // A failed destination must not sink the others.
+      if (!res || res.error) {
+        for (const p of group) results.push({ task: p.taskName, error: (res && res.error) || 'unknown error' });
+        continue;
+      }
+
+      const where = res.searched && res.searched.length ? res.searched.join(', ') : 'no month folders found';
+      for (const p of group) {
+        const folderId = res.matched[p.taskName];
+        if (folderId) {
+          writes.push({ recordId: p.recordId, taskName: p.taskName, folderUrl: `https://drive.google.com/drive/folders/${folderId}` });
+        } else if ((res.duplicates || []).includes(p.taskName)) {
+          results.push({ task: p.taskName, error: `more than one folder named "${p.taskName}" \u2014 resolve it in Drive` });
+        } else {
+          results.push({ task: p.taskName, error: `no folder named "${p.taskName}" (searched: ${where})` });
+        }
+      }
+    }
+
+    if (writes.length && !state.driveTestMode) {
+      const tableId = state.tables[state.activeTable].id;
+      try {
+        await window.airtable.updateRecords(state.baseId, tableId,
+          writes.map(w => ({ id: w.recordId, fields: { 'Creative Link': w.folderUrl } })));
+        for (const w of writes) {
+          const rec = state.records.find(r => r.id === w.recordId);
+          if (rec) rec.fields['Creative Link'] = w.folderUrl;
+          results.push({ task: w.taskName, folderUrl: w.folderUrl });
+        }
+      } catch (err) {
+        for (const w of writes) results.push({ task: w.taskName, error: `found the folder, but Creative Link not written: ${err.message}` });
+      }
+    } else {
+      for (const w of writes) results.push({ task: w.taskName, folderUrl: w.folderUrl });
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Link from Drive'; }
+  }
+
+  const s = summarizeBulkRun(results);
+  log(`linkSelectedFromDrive: ${s.delivered} linked, ${s.skipped} skipped, ${s.failed} failed`);
+  alert(`${state.driveTestMode ? 'TEST MODE \u2014 Creative Link not written.\n\n' : ''}Linked ${s.delivered}, skipped ${s.skipped}, failed ${s.failed}.\n\n${s.lines.join('\n')}`);
+  render();
+}
+
 async function uploadSelectedToDrive() {
   if (!state.selectedIds.size) return;
   if (!state.workingDirectory) { alert('Set a working directory first (settings).'); return; }
@@ -2210,6 +2327,11 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 });
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
+document.getElementById('bulk-drive-link-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-drive-link-btn').disabled) return;
+  linkSelectedFromDrive();
+});
+
 document.getElementById('bulk-drive-upload-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-drive-upload-btn').disabled) return;
   uploadSelectedToDrive();
