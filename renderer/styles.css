@@ -91,6 +91,7 @@ tr.highlight-flash td { animation: flash-highlight 1.4s ease-out 2; }
 #rename-header { display: flex; align-items: center; gap: var(--space-3); font-size: 12px; }
 #rename-task-label { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rename-task-name { color: var(--accent); font-family: monospace; font-size: 11px; }
+#panel-autofill-btn { flex-shrink: 0; padding: var(--space-1) var(--space-3); font-size: 11px; }
 #rename-panel-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 var(--space-2); flex-shrink: 0; }
 #rename-panel-close:hover { color: var(--text-primary); }
 #drop-zone { border: 1px dashed var(--border-strong); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); text-align: center; color: var(--text-muted); font-size: 12px; cursor: default; transition: border-color 0.15s, background 0.15s; }
