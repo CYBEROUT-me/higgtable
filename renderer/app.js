@@ -2003,7 +2003,7 @@ function renderDriveAppFolderRows() {
     const mirrors = document.createElement('input');
     mirrors.type = 'text';
     mirrors.className = 'drive-folder-mirrors';
-    mirrors.placeholder = 'mirrors';
+    mirrors.placeholder = 'mirrors: BL, HC';
     mirrors.title = `Other task-name prefixes that should also deliver into ${label} — e.g. BL`;
     mirrors.value = (state.driveAppMirrors[code] || []).join(', ');
     mirrors.addEventListener('change', async () => {
