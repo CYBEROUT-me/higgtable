@@ -757,19 +757,11 @@ async function exhaustListing(win, initial, stopWhen) {
   if (!target) return items;
 
   const startRows = items.length;
-  let noGrowth = 0;
-  let sign = -1;   // flipped below if this direction turns out to be wrong
-  // Stopping the instant every wanted name is found would blind the duplicate
-  // guard to a second folder of the same name further down. Drive sorts by name,
-  // so identical names are ADJACENT — a couple of extra rounds after being
-  // satisfied is enough to see one, without paging the whole folder.
-  let grace = typeof stopWhen === 'function' && stopWhen(items) ? 2 : -1;
 
-  for (let round = 0; round < 120 && noGrowth < 3; round++) {
-    if (grace === 0) break;
-    if (grace > 0) grace -= 1;
-    // A burst per round: one wheel notch per iteration would need hundreds of
-    // rounds to cross a large folder.
+  // Send one burst of wheel input and report whether the listing grew. Row count
+  // is the only trustworthy progress signal: the scrolling element cannot be
+  // identified reliably, so its scrollTop tells us nothing.
+  const burst = async (sign) => {
     for (let k = 0; k < 4; k++) {
       win.webContents.sendInputEvent({
         type: 'mouseWheel',
@@ -779,24 +771,51 @@ async function exhaustListing(win, initial, stopWhen) {
         modifiers: [], canScroll: true,
       });
     }
-    await sleep(600);
-
+    await sleep(650);
     const next = await readItems(win).catch(() => items);
-    if (next.length > items.length) {
-      items = next;
-      noGrowth = 0;
+    const grew = next.length > items.length;
+    if (next.length) items = next;
+    return grew;
+  };
+
+  // Establish which wheel direction actually loads more rows, then KEEP it.
+  // Flipping direction mid-run was resetting the no-growth counter and letting
+  // the loop exit early: one folder that reached 137 rows on one run stopped at
+  // 90 on the next, so a "not found" could not be trusted.
+  let sign = 0;
+  for (const candidate of [-1, 1]) {
+    for (let probe = 0; probe < 3 && !sign; probe++) {
+      if (await burst(candidate)) sign = candidate;
+      if (typeof stopWhen === 'function' && stopWhen(items)) break;
+    }
+    if (sign) break;
+  }
+  if (!sign) {
+    // Neither direction produced a new row: the listing was already complete.
+    logFn(`exhaustListing: ${items.length} row(s), nothing further to load`);
+    return items;
+  }
+
+  // Six consecutive quiet rounds before declaring the end. Three was not enough
+  // for Drive to deliver the next page, which truncated long listings.
+  const QUIET_ROUNDS = 6;
+  let quiet = 0;
+  let grace = -1;
+  for (let round = 0; round < 400 && quiet < QUIET_ROUNDS; round++) {
+    if (grace === 0) break;
+    if (grace > 0) grace -= 1;
+    if (await burst(sign)) {
+      quiet = 0;
+      // Keep going briefly after a match so a same-name duplicate is still seen;
+      // Drive sorts by name, so duplicates are adjacent.
       if (grace < 0 && typeof stopWhen === 'function' && stopWhen(items)) grace = 2;
     } else {
-      if (next.length) items = next;
-      noGrowth += 1;
-      // If nothing grew in the first rounds the wheel is going the wrong way.
-      if (noGrowth === 2 && round < 5) { sign = -sign; noGrowth = 0; logFn('exhaustListing: no growth, reversing wheel direction'); }
+      quiet += 1;
     }
   }
 
-  if (items.length !== startRows) {
-    logFn(`exhaustListing: ${startRows} -> ${items.length} row(s) after scrolling`);
-  }
+  const last = items.length ? items[items.length - 1].name : '(none)';
+  logFn(`exhaustListing: ${startRows} -> ${items.length} row(s) after scrolling (last row "${last}")`);
   try { await execJS(win, 'scrollToTop', SCROLL_TO_TOP_SCRIPT); } catch (e) { /* best effort */ }
   return items;
 }
