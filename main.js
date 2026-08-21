@@ -20,6 +20,29 @@ function log(msg) {
   try { fs.appendFileSync(logFilePath, line + '\n'); } catch {}
 }
 
+// Event-loop lag monitor. Airtable page bodies were arriving ~200x slower than
+// the measured link speed (61KB/s against 14MB/s available), which is either
+// server-side throttling or this process being too busy to drain the response
+// stream. Those need opposite fixes, and lag distinguishes them: high lag means
+// the bottleneck is here, low lag means it is Airtable.
+let lagWorst = 0;
+let lagReported = 0;
+(function watchEventLoopLag() {
+  const TICK = 500;
+  let expected = Date.now() + TICK;
+  setInterval(() => {
+    const drift = Date.now() - expected;
+    expected = Date.now() + TICK;
+    if (drift > lagWorst) lagWorst = drift;
+    // Report at most once every 5s, and only when the loop actually stalled.
+    if (lagWorst > 250 && Date.now() - lagReported > 5000) {
+      log(`event-loop lag: worst ${lagWorst}ms in the last window`);
+      lagReported = Date.now();
+      lagWorst = 0;
+    }
+  }, TICK).unref?.();
+})();
+
 // Let the Drive automation write step-by-step progress to the same log.
 driveBrowser.setLogger(msg => log(`[drive] ${msg}`));
 
