@@ -87,6 +87,10 @@ const recordsCache = {};
 const seenTaskIds = {};
 const tablesInFlight = new Set(); // prevents duplicate concurrent fetches for the same table
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+// Upper bound on how often a partially-loaded table is redrawn while paging in.
+const PROGRESS_RENDER_MS = 500;
+let lastProgressRender = 0;
+let progressRenderTimer = null;
 let pollTimer = null;
 let requestCounter = 0;
 
@@ -335,9 +339,24 @@ async function loadTable(tableName) {
     // once in a single pass when the fetch completes (below).
     partial = partial.concat(newRecords);
     state.records = partial;
-    refreshDES();
-    render();
     setStatus(`Loading ${tableName}... ${totalSoFar} records so far (page ${page})`);
+    // Rendering on EVERY page redrew a table that grows toward its full size, so
+    // a 9.7k-record load did ~98 renders averaging ~4.9k rows — quadratic work
+    // that also blocked the renderer while further pages arrived. Coalesce to at
+    // most one render per PROGRESS_RENDER_MS; the final render below is what
+    // guarantees the complete list is shown.
+    const now = Date.now();
+    if (now - lastProgressRender >= PROGRESS_RENDER_MS) {
+      lastProgressRender = now;
+      refreshDES();
+      render();
+    } else if (!progressRenderTimer) {
+      progressRenderTimer = setTimeout(() => {
+        progressRenderTimer = null;
+        lastProgressRender = Date.now();
+        if (state.activeTable === tableName) { refreshDES(); render(); }
+      }, PROGRESS_RENDER_MS);
+    }
   });
 
   try {
@@ -360,6 +379,9 @@ async function loadTable(tableName) {
     setStatus(`Error: ${err.message}`, true);
   } finally {
     unsubscribe();
+    // Drop any pending coalesced render: the final render above already drew the
+    // complete list, so a trailing one would only redraw it.
+    if (progressRenderTimer) { clearTimeout(progressRenderTimer); progressRenderTimer = null; }
     hideProgressBar();
     setRefreshBusy(false);
     tablesInFlight.delete(tableName);
@@ -422,9 +444,33 @@ function snapshotSeenIds() {
   persistSeenIds();
 }
 
+// A fixed 5-minute setInterval was fine while a full refresh took seconds. Once
+// the four tables grew to ~16k records a cycle took 16+ MINUTES, so cycles ran
+// essentially back-to-back — the app spent ~85% of its life re-downloading
+// everything, and every table the user opened queued behind ~160 requests
+// (MAX_CONCURRENT_REQUESTS is 3, network-wide). Self-scheduling after the cycle
+// FINISHES, resting at least as long as the cycle took, keeps the duty cycle at
+// or below half and makes runaway impossible however large the data grows.
 function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollForUpdates, POLL_INTERVAL_MS);
+  if (pollTimer) clearTimeout(pollTimer);
+  scheduleNextPoll(POLL_INTERVAL_MS);
+}
+
+function scheduleNextPoll(delayMs) {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    const started = Date.now();
+    try {
+      await pollForUpdates();
+    } finally {
+      const took = Date.now() - started;
+      const rest = Math.max(POLL_INTERVAL_MS, took);
+      if (took > POLL_INTERVAL_MS) {
+        log(`scheduleNextPoll: cycle took ${Math.round(took / 1000)}s — resting ${Math.round(rest / 1000)}s before the next one`);
+      }
+      scheduleNextPoll(rest);
+    }
+  }, delayMs);
 }
 
 function requestNotificationPermission() {
