@@ -301,3 +301,18 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .canvas-card-type { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); }
 .canvas-card-name { font-size: 11px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .canvas-card-meta, .canvas-card-network { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Google Drive sign-in row in Settings */
+#drive-signin-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+#drive-signin-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+#drive-signin-status.signin-ok { color: var(--accent); }
+#drive-signin-status.signin-bad { color: #d29922; }

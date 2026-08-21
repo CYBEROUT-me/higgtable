@@ -367,6 +367,18 @@ ipcMain.handle('drive-probe-rows', async (_e, folderId) => {
   }
 });
 
+ipcMain.handle('drive-sign-in', async () => {
+  try {
+    log('drive-sign-in: opening the Drive window for the user');
+    const r = await driveBrowser.signIn();
+    log(`drive-sign-in: loggedIn=${r.loggedIn}`);
+    return r;
+  } catch (err) {
+    log(`drive-sign-in FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('drive-find-folders', async (_e, payload) => {
   try {
     log(`drive-find-folders: ${((payload && payload.taskNames) || []).length} task(s) under ${payload && payload.appFolderId}`);

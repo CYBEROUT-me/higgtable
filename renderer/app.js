@@ -1680,7 +1680,13 @@ async function linkSelectedFromDrive() {
 
       // A failed destination must not sink the others.
       if (!res || res.error) {
-        for (const p of group) results.push({ task: p.taskName, error: (res && res.error) || 'unknown error' });
+        const msg = (res && res.error) || 'unknown error';
+        // A signed-out session is the one failure a user can fix immediately, so
+        // name the button instead of leaving them to find it.
+        const hint = /not signed in/i.test(msg)
+          ? `${msg} (Settings \u2192 Google Drive Sign-in)`
+          : msg;
+        for (const p of group) results.push({ task: p.taskName, error: hint });
         continue;
       }
 
@@ -2274,7 +2280,38 @@ function hideSettingsModal() {
 async function saveSettings() {
   const key = document.getElementById('api-key-input').value.trim();
   if (!key) { hideSettingsModal(); return; }
-  const btn = document.getElementById('settings-save-btn');
+  const btn = // Deliberate Google sign-in. Every other Drive path only reaches Google after
+// resolving folders and tasks, so a new user with nothing configured never got
+// a login window at all.
+document.getElementById('drive-signin-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('drive-signin-btn');
+  const status = document.getElementById('drive-signin-status');
+  btn.disabled = true;
+  btn.textContent = 'Opening Google...';
+  status.textContent = 'A Drive window will open — sign in there, then come back.';
+  status.className = '';
+  try {
+    const r = await window.app.driveSignIn();
+    if (r && r.error) {
+      status.textContent = r.error;
+      status.className = 'signin-bad';
+    } else if (r && r.loggedIn) {
+      status.textContent = r.alreadySignedIn ? 'Already signed in.' : 'Signed in.';
+      status.className = 'signin-ok';
+    } else {
+      status.textContent = 'Not signed in yet. Click again once the Google window is done.';
+      status.className = 'signin-bad';
+    }
+  } catch (err) {
+    status.textContent = `Sign-in failed: ${err.message}`;
+    status.className = 'signin-bad';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in to Google Drive';
+  }
+});
+
+document.getElementById('settings-save-btn');
   btn.disabled = true;
   try {
     await window.app.saveSettings({ apiKey: key });

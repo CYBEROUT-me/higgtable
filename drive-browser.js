@@ -108,7 +108,13 @@ async function ensureLoggedIn({ trustCurrentPage = false } = {}) {
   await loadAndWait(win, DRIVE_ROOT);
   const url = win.webContents.getURL();
   const loggedIn = url.startsWith('https://drive.google.com/');
-  if (!loggedIn) win.show(); // surface the real Google login page for the user
+  if (!loggedIn) {
+    // Surface Google's real login page. show() alone can leave the window behind
+    // the main one, where the user never notices it.
+    win.show();
+    win.focus();
+    win.webContents.focus();
+  }
   return { loggedIn, url };
 }
 
@@ -1528,6 +1534,50 @@ async function doFindFoldersByNames({ appFolderId, monthName, monthYear, taskNam
   return { matched, duplicates, unmatched: remaining, searched, sampleNames };
 }
 
+// Opens Drive visibly so the user can sign in to Google themselves, and waits
+// until they have. Needed because every other path reaches Drive only AFTER
+// resolving folders and tasks — a new user with nothing configured never gets
+// that far, so no login window ever appeared.
+//
+// This module never reads, stores, types, or transmits credentials: the user
+// types them into Google's own page in this window.
+async function signIn() {
+  if (inFlight) {
+    throw new Error('a Drive operation is already running — wait for it to finish before signing in');
+  }
+  inFlight = (async () => {
+    const win = getDriveWindow({ show: true });
+    win.show();
+    win.focus();
+    win.webContents.focus();
+    await loadAndWait(win, DRIVE_ROOT);
+
+    let url = win.webContents.getURL();
+    if (url.startsWith('https://drive.google.com/')) {
+      logFn('signIn: already signed in');
+      win.hide();
+      return { loggedIn: true, url, alreadySignedIn: true };
+    }
+
+    // Google's login flow is several pages; wait for the session to land back on
+    // Drive rather than guessing how long it takes.
+    logFn('signIn: waiting for the user to complete Google sign-in');
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      url = win.webContents.getURL();
+      if (url.startsWith('https://drive.google.com/')) {
+        logFn('signIn: signed in');
+        win.hide();
+        return { loggedIn: true, url };
+      }
+    }
+    logFn(`signIn: timed out, still at ${url}`);
+    return { loggedIn: false, url, timedOut: true };
+  })().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
 module.exports = {
   getDriveWindow,
   waitForLoad,
@@ -1551,5 +1601,6 @@ module.exports = {
   deliver,
   uploadFolderToDrive,
   findFoldersByNames,
+  signIn,
   PARTITION,
 };

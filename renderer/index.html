@@ -177,6 +177,13 @@
       <p>Opens Drive links with this account index (drive.google.com/drive/u/N/...) — leave blank to open links as-is:</p>
       <input type="number" id="drive-account-index-input" min="0" placeholder="e.g. 2">
 
+      <h2>Google Drive Sign-in</h2>
+      <p>"Link from Drive" needs a signed-in Google account. You type your password into Google's own page — HiggTable never sees it.</p>
+      <div id="drive-signin-row">
+        <button id="drive-signin-btn">Sign in to Google Drive</button>
+        <span id="drive-signin-status"></span>
+      </div>
+
       <h2>Drive Delivery Folders</h2>
       <p>Paste each app's "<code>&lt;App&gt;_creatives</code>" folder URL from Drive (open the folder, copy the address). Required before uploading:</p>
       <div id="drive-app-folders"></div>
