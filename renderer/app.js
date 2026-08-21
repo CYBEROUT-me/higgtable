@@ -1533,6 +1533,10 @@ function onRowClick(rec, tr, e, index, filteredList) {
     return;
   }
   state.selectedTask = rec;
+  // Select it as well, so the action bar appears for ONE task exactly as it does
+  // for several. The bar's Autofill replaces the panel's own button, which only
+  // existed because a single click used to leave nothing selected.
+  state.selectedIds.add(rec.id);
   openRenamePanel(rec);
   render();
 }
@@ -1546,6 +1550,7 @@ function openRenamePanel(rec) {
 }
 
 function clearTaskSelection() {
+  if (state.selectedTask) state.selectedIds.delete(state.selectedTask.id);
   state.selectedTask = null;
   document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
   document.getElementById('rename-panel').classList.add('hidden');
@@ -1638,7 +1643,6 @@ function renderFileList() {
 }
 
 const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
-
 
 // Uploads the task's local folder to Drive, then writes the Drive folder link
 // into Creative Link — but only if every file was verified present. A wrong
@@ -2063,9 +2067,9 @@ async function openAutofillModal() {
     alert('Set a working directory first (⚙ Settings).');
     return;
   }
-  // Autofill normally runs over the bulk selection, but a plain click clears
-  // that and selects a single task for the rename panel instead. Fall back to
-  // that task so Autofill works for one task without needing Cmd-click.
+  // Runs over the selection, which a plain click now populates with the one
+  // clicked task. The selectedTask fallback remains for any path that opens the
+  // rename panel without going through a row click.
   const records = state.selectedIds.size
     ? state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
     : [state.selectedTask].filter(r => r && r.fields['Name']);
@@ -2075,7 +2079,7 @@ async function openAutofillModal() {
     .find(f => f.name === 'Timing')?.options?.choices?.map(c => c.name) || [];
 
   // Either trigger may have started this: the bulk bar or the rename panel.
-  const btns = ['bulk-autofill-btn', 'panel-autofill-btn']
+  const btns = ['bulk-autofill-btn']
     .map(id => document.getElementById(id)).filter(Boolean);
   btns.forEach(b => { b.disabled = true; b.textContent = 'Searching...'; });
   const btn = { set disabled(v) { btns.forEach(b => { b.disabled = v; }); },
@@ -2411,7 +2415,6 @@ document.getElementById('refresh-btn').addEventListener('click', () => {
   refreshTableData(state.activeTable);
 });
 
-
 document.getElementById('dashboard-refresh-btn').addEventListener('click', async () => {
   const btn = document.getElementById('dashboard-refresh-btn');
   if (btn.disabled) return;
@@ -2448,6 +2451,10 @@ document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
   openAutofillModal();
 });
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
+  // Also close the rename panel: a single click selects the task AND opens the
+  // panel, so clearing only the selection would leave the panel sitting over a
+  // task that is no longer selected.
+  clearTaskSelection();
   state.selectedIds.clear();
   render();
 });
@@ -2561,10 +2568,6 @@ document.getElementById('clear-files-btn').addEventListener('click', () => {
 document.getElementById('rename-btn').addEventListener('click', performRename);
 const driveUploadBtn = document.getElementById('drive-upload-btn');
 if (driveUploadBtn) driveUploadBtn.addEventListener('click', uploadTaskToDrive);
-document.getElementById('panel-autofill-btn').addEventListener('click', () => {
-  if (document.getElementById('panel-autofill-btn').disabled) return;
-  openAutofillModal();
-});
 
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
