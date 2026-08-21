@@ -427,18 +427,23 @@ ipcMain.handle('pick-directory', async () => {
 // Walks the working directory once and returns a map of the requested
 // filenames to their full path, so "Autofill" doesn't re-scan the
 // filesystem once per task per asset type (preview image, 9x16 video, ...).
+// `wanted` maps a lowercased filename to the caller's canonical spelling, so
+// matching ignores case while the result stays keyed by the name the caller
+// asked for. Render pipelines emit ".JPG" as readily as ".jpg", and a
+// case-sensitive compare would silently skip those files.
 function walkDirCollecting(dir, wanted, found) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walkDirCollecting(full, wanted, found);
-    else if (wanted.has(entry.name)) found[entry.name] = full;
+    if (entry.isDirectory()) { walkDirCollecting(full, wanted, found); continue; }
+    const key = wanted.get(entry.name.toLowerCase());
+    if (key && !found[key]) found[key] = full;
   }
 }
 
 ipcMain.handle('find-asset-files', (_e, dir, filenames) => {
-  const wanted = new Set(filenames);
+  const wanted = new Map((filenames || []).map(n => [String(n).toLowerCase(), n]));
   const found = {};
   walkDirCollecting(dir, wanted, found);
   return found;

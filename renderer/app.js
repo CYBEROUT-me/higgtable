@@ -2033,8 +2033,8 @@ async function openAutofillModal() {
     pendingAutofillCandidates = await Promise.all(records.map(async rec => {
       const base = stripAspectRatio(rec.fields['Name']);
       // Prefer the conventional ratio, fall back to whatever was rendered.
-      const previewHit = pickByRatioPreference(base, found, PREVIEW_RATIO_ORDER, 'png');
-      const videoHit = pickByRatioPreference(base, found, VIDEO_RATIO_ORDER, 'mp4');
+      const previewHit = pickByRatioPreference(base, found, PREVIEW_RATIO_ORDER, PREVIEW_EXTS);
+      const videoHit = pickByRatioPreference(base, found, VIDEO_RATIO_ORDER, VIDEO_EXTS);
       const previewFilename = previewHit ? previewHit.filename : null;
       const videoFilename = videoHit ? videoHit.filename : null;
       const previewPath = previewHit ? previewHit.path : null;
@@ -2059,7 +2059,7 @@ async function openAutofillModal() {
     }));
 
     if (!pendingAutofillCandidates.some(c => c.preview || c.timing)) {
-      alert('No preview image or video found for the selected tasks.\n\nSearched every aspect ratio (1x1, 9x16, 4x5, 16x9, ...) under the working directory.');
+      alert('No preview image or video found for the selected tasks.\n\nSearched every aspect ratio (1x1, 9x16, 4x5, 16x9, ...) as .png/.jpg/.jpeg, and .mp4 video, under the working directory.');
       return;
     }
 
