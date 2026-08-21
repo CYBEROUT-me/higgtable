@@ -1645,8 +1645,17 @@ async function linkSelectedFromDrive() {
     return;
   }
 
+  // Name the DESTINATION, not just the month. Without it a task silently aimed
+  // at the wrong app folder — via a mirror, or a mis-pasted URL — looks exactly
+  // like a correctly aimed one, and only shows up as a puzzling "not found".
+  const destLabel = (p) => {
+    if (state.driveTestMode) return 'test folder';
+    const c = candidates.find(x => x.recordId === p.recordId);
+    const code = c ? c.code : '';
+    return `${DRIVE_APP_LABELS[code] || code || '?'} (${code || '?'})`;
+  };
   const lines = [
-    ...plans.map(p => `  ${p.taskName}  ->  look up in ${monthName}`),
+    ...plans.map(p => `  ${p.taskName}  ->  ${destLabel(p)} / ${monthName}`),
     ...skipped.map(s => `  ${s.taskName}  ->  SKIP (${s.reason})`),
   ];
   const banner = state.driveTestMode
