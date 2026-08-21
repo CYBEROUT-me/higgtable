@@ -34,18 +34,42 @@ async function throttledFetch(url, options) {
   }
 }
 
-async function get(url, apiKey, logger = noop, attempt = 0) {
-  const t0 = Date.now();
-  const res = await throttledFetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (res.status === 429 && attempt < 5) {
-    const retryAfter = Number(res.headers?.get?.('Retry-After')) || attempt + 1;
+// fetch() resolves as soon as the RESPONSE HEADERS arrive; the body is still
+// streaming at that point. Releasing the concurrency slot there — which is what
+// throttledFetch did — meant the cap never limited the thing that actually uses
+// the bandwidth: slots freed early, new requests started, and an unbounded
+// number of bodies streamed at once. Measured 2026-08-21: pages logged ~1.2s
+// each while arriving ~9s apart, because the logged time excluded the body.
+//
+// So the slot is held until the body has been read, and the log reports the
+// headers/body split. The 429 retry deliberately sits OUTSIDE the slot: waiting
+// for Retry-After while holding one would idle a slot, and with all slots doing
+// it nothing could proceed.
+async function get(url, apiKey, logger = noop) {
+  for (let attempt = 0; ; attempt++) {
+    const t0 = Date.now();
+    let retryAfter = null;
+    await acquireSlot();
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const tHeaders = Date.now() - t0;
+      if (res.status === 429 && attempt < 5) {
+        retryAfter = Number(res.headers?.get?.('Retry-After')) || attempt + 1;
+      } else if (!res.ok) {
+        logger(`GET ${url} → ${res.status} in ${tHeaders}ms`);
+        throw new Error(`Airtable error: ${res.status} ${res.statusText}`);
+      } else {
+        const data = await res.json();
+        const total = Date.now() - t0;
+        logger(`GET ${url} → ${res.status} in ${total}ms (headers ${tHeaders}ms, body ${total - tHeaders}ms)`);
+        return data;
+      }
+    } finally {
+      releaseSlot();
+    }
     logger(`rate limited (429) on ${url} — retrying in ${retryAfter}s (attempt ${attempt + 1}/5)`);
     await new Promise(r => setTimeout(r, retryAfter * 1000));
-    return get(url, apiKey, logger, attempt + 1);
   }
-  logger(`GET ${url} → ${res.status} in ${Date.now() - t0}ms`);
-  if (!res.ok) throw new Error(`Airtable error: ${res.status} ${res.statusText}`);
-  return res.json();
 }
 
 async function fetchBases(apiKey, logger = noop) {

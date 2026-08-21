@@ -56,3 +56,25 @@ test('fetchRecords throws on non-ok response', async () => {
   global.fetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' });
   await expect(fetchRecords('fakekey', 'appXXX', 'tblXXX')).rejects.toThrow('Airtable error: 403 Forbidden');
 });
+
+// The concurrency cap must cover the BODY download, not just the headers.
+// fetch() resolves on headers, so releasing the slot there let an unbounded
+// number of bodies stream at once — the cap capped nothing that mattered.
+test('the request cap limits concurrent body reads, not just headers', async () => {
+  let inFlightBodies = 0;
+  let peak = 0;
+  global.fetch = jest.fn(async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => {
+      inFlightBodies += 1;
+      peak = Math.max(peak, inFlightBodies);
+      await new Promise(r => setTimeout(r, 20));
+      inFlightBodies -= 1;
+      return { records: [] };
+    },
+  }));
+  await Promise.all(Array.from({ length: 8 }, () => fetchRecords('key', 'base', 'table')));
+  expect(peak).toBeLessThanOrEqual(3);
+});
