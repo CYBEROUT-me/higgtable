@@ -1,6 +1,6 @@
 {
   "name": "higgtable",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Airtable file renaming tool",
   "main": "main.js",
   "scripts": {
@@ -54,7 +54,12 @@
     "image-size": "^2.0.2"
   },
   "jest": {
-    "modulePathIgnorePatterns": ["<rootDir>/.claude/"],
-    "testPathIgnorePatterns": ["/node_modules/", "<rootDir>/.claude/"]
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.claude/"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/.claude/"
+    ]
   }
 }
