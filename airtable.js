@@ -59,10 +59,17 @@ async function get(url, apiKey, logger = noop) {
         logger(`GET ${url} → ${res.status} in ${tHeaders}ms`);
         throw new Error(`Airtable error: ${res.status} ${res.statusText}`);
       } else {
-        const data = await res.json();
+        // Read as text first purely so the payload SIZE can be reported. Body
+        // download dominates load time, and the fix differs completely
+        // depending on whether that is a large payload (fetch fewer fields) or
+        // a slow link (nothing to gain from tuning concurrency).
+        const text = await res.text();
         const total = Date.now() - t0;
-        logger(`GET ${url} → ${res.status} in ${total}ms (headers ${tHeaders}ms, body ${total - tHeaders}ms)`);
-        return data;
+        const bodyMs = total - tHeaders;
+        const kb = Math.round(text.length / 1024);
+        const kbps = bodyMs > 0 ? Math.round(text.length / 1024 / (bodyMs / 1000)) : 0;
+        logger(`GET ${url} → ${res.status} in ${total}ms (headers ${tHeaders}ms, body ${bodyMs}ms, ${kb}KB, ${kbps}KB/s)`);
+        return JSON.parse(text);
       }
     } finally {
       releaseSlot();

@@ -1,14 +1,23 @@
 // tests/airtable.test.js
 const { fetchBases, fetchTables, fetchRecords } = require('../airtable');
 
+// Mirrors the part of the real Response API the client uses. It reads text()
+// (so it can log payload size) and parses that, so a mock supplying only json()
+// would not exercise the real path.
+const jsonResponse = (payload, over = {}) => ({
+  ok: true,
+  status: 200,
+  headers: { get: () => null },
+  text: async () => JSON.stringify(payload),
+  json: async () => payload,
+  ...over,
+});
+
 global.fetch = jest.fn();
 afterEach(() => jest.clearAllMocks());
 
 test('fetchBases returns bases array', async () => {
-  global.fetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({ bases: [{ id: 'appXXX', name: 'Test Base' }] })
-  });
+  global.fetch.mockResolvedValueOnce(jsonResponse({ bases: [{ id: 'appXXX', name: 'Test Base' }] }));
   const result = await fetchBases('fakekey');
   expect(result).toEqual([{ id: 'appXXX', name: 'Test Base' }]);
   expect(fetch).toHaveBeenCalledWith(
@@ -23,10 +32,7 @@ test('fetchBases throws on non-ok response', async () => {
 });
 
 test('fetchTables returns tables array', async () => {
-  global.fetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({ tables: [{ id: 'tblXXX', name: 'Tasks', fields: [{ name: 'Name' }] }] })
-  });
+  global.fetch.mockResolvedValueOnce(jsonResponse({ tables: [{ id: 'tblXXX', name: 'Tasks', fields: [{ name: 'Name' }] }] }));
   const result = await fetchTables('fakekey', 'appXXX');
   expect(result).toEqual([{ id: 'tblXXX', name: 'Tasks', fields: [{ name: 'Name' }] }]);
   expect(fetch).toHaveBeenCalledWith(
@@ -37,14 +43,8 @@ test('fetchTables returns tables array', async () => {
 
 test('fetchRecords handles pagination', async () => {
   global.fetch
-    .mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ records: [{ id: 'recA', fields: { Name: 'Task A' } }], offset: 'page2' })
-    })
-    .mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ records: [{ id: 'recB', fields: { Name: 'Task B' } }] })
-    });
+    .mockResolvedValueOnce(jsonResponse({ records: [{ id: 'recA', fields: { Name: 'Task A' } }], offset: 'page2' }))
+    .mockResolvedValueOnce(jsonResponse({ records: [{ id: 'recB', fields: { Name: 'Task B' } }] }));
   const result = await fetchRecords('fakekey', 'appXXX', 'tblXXX');
   expect(result).toHaveLength(2);
   expect(result[0].id).toBe('recA');
@@ -67,12 +67,12 @@ test('the request cap limits concurrent body reads, not just headers', async () 
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: async () => {
+    text: async () => {
       inFlightBodies += 1;
       peak = Math.max(peak, inFlightBodies);
       await new Promise(r => setTimeout(r, 20));
       inFlightBodies -= 1;
-      return { records: [] };
+      return JSON.stringify({ records: [] });
     },
   }));
   await Promise.all(Array.from({ length: 8 }, () => fetchRecords('key', 'base', 'table')));
