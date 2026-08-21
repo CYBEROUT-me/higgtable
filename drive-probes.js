@@ -95,6 +95,16 @@ const PROBES = {
 // they are validated at their point of use instead.
 const PREFLIGHT_PROBES = ['mainRegion'];
 
+// COST OF KEEPING THE WINDOW ALIVE. The Drive window sets
+// backgroundThrottling:false so listings render while it is hidden. That also
+// means Chromium never slows the page down, and Drive is a heavy SPA — so a
+// merely HIDDEN window keeps burning CPU for the whole app session. Measured
+// 2026-08-20/21: Airtable table loads degraded from ~30s to ~16 minutes for the
+// same 9.7k-record table over a day of Drive use. The window is now destroyed
+// after 60s idle (withDriveSession / scheduleDriveShutdown in drive-browser.js).
+// Sign-in survives because cookies live in the persistent session partition.
+// Never "fix" a rendering problem by keeping this window alive longer.
+
 // VIRTUALISED LISTINGS, page size 50. Measured 2026-08-20: six real client month
 // folders each reported EXACTLY 50 rows while holding more, and assigning
 // scrollTop did NOT grow the count — Drive's lazy load ignores programmatic

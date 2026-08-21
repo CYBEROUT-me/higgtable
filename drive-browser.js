@@ -33,7 +33,53 @@ function setLogger(fn) { logFn = typeof fn === 'function' ? fn : () => {}; }
 // first and both fail in confusing ways.
 let inFlight = null;
 
+// A live Google Drive page is expensive: it is a heavy SPA, and because this
+// window sets backgroundThrottling:false — required so listings render while the
+// window is hidden — Chromium never slows it down. Hiding it after an operation
+// was NOT enough: it kept running for the whole app session and starved the main
+// window. Airtable table loads went from ~30s to ~16 minutes over a day of use.
+// So the window is destroyed once idle. Sign-in survives, because cookies live
+// in the persistent session partition, not in the window.
+const DRIVE_IDLE_MS = 60000;
+let idleTimer = null;
+let busyOps = 0;
+
+function cancelDriveShutdown() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+}
+
+function scheduleDriveShutdown() {
+  cancelDriveShutdown();
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    if (busyOps > 0) { scheduleDriveShutdown(); return; }
+    if (driveWin && !driveWin.isDestroyed()) {
+      logFn('closing the idle Drive window so it stops competing with the app');
+      driveWin.destroy();
+    }
+    driveWin = null;
+  }, DRIVE_IDLE_MS);
+  // Never hold the process open just for this timer.
+  if (idleTimer && typeof idleTimer.unref === 'function') idleTimer.unref();
+}
+
+// Wraps every public Drive operation so the window is kept alive while work is
+// in progress and reaped afterwards. The counter matters because a bulk run
+// makes several calls in a row and must not have the window pulled out from
+// under it mid-upload.
+async function withDriveSession(fn) {
+  busyOps += 1;
+  cancelDriveShutdown();
+  try {
+    return await fn();
+  } finally {
+    busyOps -= 1;
+    if (busyOps === 0) scheduleDriveShutdown();
+  }
+}
+
 function getDriveWindow({ show = false } = {}) {
+  cancelDriveShutdown();
   if (driveWin && !driveWin.isDestroyed()) {
     if (show) driveWin.show();
     return driveWin;
@@ -316,7 +362,7 @@ const ROW_SAMPLE_SCRIPT = '(() => {' +
 // chooser INTERCEPTED, to learn whether Chromium hands us a backendNodeId we
 // can feed to DOM.setFileInputFiles. Nothing is ever uploaded: the chooser is
 // cancelled and no files are supplied.
-async function diagnose(folderId, opts = {}) {
+async function do_diagnose(folderId, opts = {}) {
   const login = await ensureLoggedIn();
   if (!login.loggedIn) return { loggedIn: false, url: login.url };
 
@@ -1045,7 +1091,7 @@ async function deliver(args) {
   }
   const watchdog = new Promise((_r, reject) =>
     setTimeout(() => reject(new Error('Drive upload timed out after 5 minutes — check higgtable.log for the last [drive] step reached')), 300000));
-  inFlight = Promise.race([doDeliver(args), watchdog]).finally(() => { inFlight = null; });
+  inFlight = withDriveSession(() => Promise.race([doDeliver(args), watchdog])).finally(() => { inFlight = null; });
   return inFlight;
 }
 
@@ -1165,7 +1211,7 @@ const ROW_DUMP_SCRIPT = '(() => {' +
 // and a shared folder was observed rendering rows with NO aria-label at all —
 // making every item look like a file. Run this in a folder that works and one
 // that does not, then compare to find a discriminator that holds in both.
-async function probeItemRows(folderId) {
+async function do_probeItemRows(folderId) {
   if (!folderId) throw new Error('probeItemRows needs a folder id');
   const login = await ensureLoggedIn({ trustCurrentPage: true });
   if (!login.loggedIn) return { error: 'not signed in to Google' };
@@ -1193,7 +1239,7 @@ async function probeItemRows(folderId) {
 //     paths into the directory entries Drive's drop handler reads.
 // This UPLOADS into whatever folder id it is given. Point it at a scratch
 // folder, never a client folder. It never touches Airtable.
-async function probeMultiFolderUpload(folderId, folderPaths, mode = 'chooser') {
+async function do_probeMultiFolderUpload(folderId, folderPaths, mode = 'chooser') {
   if (!folderId) throw new Error('probeMultiFolderUpload needs a destination folder id');
   if (!Array.isArray(folderPaths) || folderPaths.length < 2) {
     throw new Error('pass at least two local folder paths — one proves nothing about batching');
@@ -1295,7 +1341,7 @@ async function probeMultiFolderUpload(folderId, folderPaths, mode = 'chooser') {
 // Uploads a whole local folder via New -> Folder upload. Drive creates the task
 // folder itself, which removes the New-folder dialog — the most failure-prone
 // part of the single-file path. Only the MONTH folder is find-or-created here.
-async function uploadFolderToDrive({ appFolderId, monthName, taskName, localFolderPath, monthFolderId }) {
+async function do_uploadFolderToDrive({ appFolderId, monthName, taskName, localFolderPath, monthFolderId }) {
   if (!appFolderId) throw new Error('no Drive folder configured for this app code');
   if (!monthName || !taskName || !localFolderPath) throw new Error('missing month, task name, or local folder');
 
@@ -1454,7 +1500,7 @@ async function findFoldersByNames(args) {
   }
   const watchdog = new Promise((_r, reject) =>
     setTimeout(() => reject(new Error('Drive lookup timed out after 5 minutes — check higgtable.log for the last [drive] step reached')), 300000));
-  inFlight = Promise.race([doFindFoldersByNames(args), watchdog]).finally(() => { inFlight = null; });
+  inFlight = withDriveSession(() => Promise.race([doFindFoldersByNames(args), watchdog])).finally(() => { inFlight = null; });
   return inFlight;
 }
 
@@ -1564,7 +1610,7 @@ async function signIn() {
   if (inFlight) {
     throw new Error('a Drive operation is already running — wait for it to finish before signing in');
   }
-  inFlight = (async () => {
+  inFlight = withDriveSession(async () => {
     const win = getDriveWindow({ show: true });
     win.show();
     win.focus();
@@ -1593,8 +1639,18 @@ async function signIn() {
     }
     logFn(`signIn: timed out, still at ${url}`);
     return { loggedIn: false, url, timedOut: true };
-  })().finally(() => { inFlight = null; });
+  }).finally(() => { inFlight = null; });
   return inFlight;
+}
+
+
+// Public wrappers: every Drive operation runs inside withDriveSession so the
+// window is closed once nothing needs it.
+function uploadFolderToDrive(args) { return withDriveSession(() => do_uploadFolderToDrive(args)); }
+function diagnose(folderId, opts) { return withDriveSession(() => do_diagnose(folderId, opts)); }
+function probeItemRows(folderId) { return withDriveSession(() => do_probeItemRows(folderId)); }
+function probeMultiFolderUpload(folderId, folderPaths, mode) {
+  return withDriveSession(() => do_probeMultiFolderUpload(folderId, folderPaths, mode));
 }
 
 module.exports = {
