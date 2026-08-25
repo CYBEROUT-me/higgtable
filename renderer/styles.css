@@ -133,13 +133,16 @@ footer#statusbar.error { color: #f66; }
    keeps the layout identical while making the bar's purpose visible before
    anything is selected. pointer-events:none means a stray click cannot land on
    an inactive button. */
-#bulk-actions-bar.empty {
+/* Class is "inactive", NOT "empty": .empty is an existing utility for
+   empty-state messages and carries margin-top:40px plus italics and centring,
+   which leaked onto the bar and opened a 40px gap above it. */
+#bulk-actions-bar.inactive {
   background: var(--bg-surface-2);
   border-bottom-color: var(--border);
   pointer-events: none;
 }
-#bulk-actions-bar.empty #bulk-actions-count { color: var(--text-muted); font-weight: 400; }
-#bulk-actions-bar.empty button {
+#bulk-actions-bar.inactive #bulk-actions-count { color: var(--text-muted); font-weight: 400; }
+#bulk-actions-bar.inactive button {
   background: var(--bg-surface);
   border-color: var(--border);
   color: var(--text-muted);

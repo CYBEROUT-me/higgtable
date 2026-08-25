@@ -818,7 +818,7 @@ function render() {
 function updateBulkActionsBar() {
   const bar = document.getElementById('bulk-actions-bar');
   const count = state.selectedIds.size;
-  bar.classList.toggle('empty', count === 0);
+  bar.classList.toggle('inactive', count === 0);
   document.getElementById('bulk-actions-count').textContent = `${count} selected`;
 }
 
