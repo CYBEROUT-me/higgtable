@@ -822,35 +822,56 @@ function updateBulkActionsBar() {
   document.getElementById('bulk-actions-count').textContent = `${count} selected`;
 }
 
-async function markSelectedAsToAccept() {
+// Both bulk status actions differ only in the target status, the button they
+// drive, and whether a completion date is stamped — so they share one
+// implementation.
+//
+// "Date Done" is written ONLY when a task reaches "To accept": that field
+// records when work finished, and moving a task back into progress must not
+// claim it was completed today. An existing Date Done is left alone rather than
+// cleared, which is safe because the dashboard filters on Status first (see
+// buildDashboardData) so a task back in progress is excluded either way.
+async function markSelectedAs(status, { btnId, label, stampDateDone }) {
   if (!state.selectedIds.size) return;
   const tableInfo = state.tables[state.activeTable];
   if (!tableInfo) return;
 
   const ids = [...state.selectedIds];
-  const today = toISO(new Date());
-  const btn = document.getElementById('bulk-mark-accept-btn');
-  btn.disabled = true;
-  btn.textContent = 'Updating...';
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
   try {
-    const updates = ids.map(id => ({ id, fields: { Status: 'To accept', 'Date Done': today } }));
+    const fields = { Status: status };
+    if (stampDateDone) fields['Date Done'] = toISO(new Date());
+    const updates = ids.map(id => ({ id, fields: { ...fields } }));
     const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
     const byId = new Map(results.map(r => [r.id, r]));
     state.records.forEach(rec => {
       const updated = byId.get(rec.id);
       if (updated) rec.fields = updated.fields;
     });
-    log(`markSelectedAsToAccept: updated ${results.length} record(s) to To accept`);
+    log(`markSelectedAs: updated ${results.length} record(s) to ${status}`);
     state.selectedIds.clear();
+    clearTaskSelection();
     render();
     maybeRefreshDashboard();
   } catch (err) {
     alert(`Failed to update some records: ${err.message}`);
-    log(`markSelectedAsToAccept: FAILED — ${err.message}`);
+    log(`markSelectedAs(${status}): FAILED — ${err.message}`);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Mark as To Accept';
+    if (btn) { btn.disabled = false; btn.textContent = label; }
   }
+}
+
+async function markSelectedAsToAccept() {
+  return markSelectedAs('To accept', {
+    btnId: 'bulk-mark-accept-btn', label: 'Mark as To Accept', stampDateDone: true,
+  });
+}
+
+async function markSelectedAsInWork() {
+  return markSelectedAs('In work', {
+    btnId: 'bulk-mark-inwork-btn', label: 'Mark as In Work', stampDateDone: false,
+  });
 }
 
 // ── UI Components ────────────────────────────────────────────────────────
@@ -2433,6 +2454,7 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 });
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
+document.getElementById('bulk-mark-inwork-btn').addEventListener('click', markSelectedAsInWork);
 document.getElementById('bulk-drive-link-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-drive-link-btn').disabled) return;
   linkSelectedFromDrive();
