@@ -126,7 +126,12 @@ footer#statusbar.error { color: #f66; }
 
 /* ── Bulk actions ── */
 #bulk-actions-bar { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) var(--space-4); background: rgba(79, 214, 173, 0.12); border-bottom: 1px solid var(--accent-strong); font-size: 12px; flex-shrink: 0; }
-#bulk-actions-bar.hidden { display: none; }
+/* Nothing selected: keep the bar's BOX in the layout and just make it
+   invisible. Toggling display:none removed it from flow, so the first click of a
+   double-click shifted every row down and the second click landed on the wrong
+   row — opening a task by double-click became nearly impossible. visibility
+   also makes the buttons non-interactive, so no stray clicks land on them. */
+#bulk-actions-bar.empty { visibility: hidden; background: transparent; border-bottom-color: transparent; }
 #bulk-actions-count { color: var(--accent); font-weight: 600; }
 
 /* ── Dashboard ── */
