@@ -126,12 +126,25 @@ footer#statusbar.error { color: #f66; }
 
 /* ── Bulk actions ── */
 #bulk-actions-bar { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) var(--space-4); background: rgba(79, 214, 173, 0.12); border-bottom: 1px solid var(--accent-strong); font-size: 12px; flex-shrink: 0; }
-/* Nothing selected: keep the bar's BOX in the layout and just make it
-   invisible. Toggling display:none removed it from flow, so the first click of a
+/* Nothing selected: show the SAME bar, greyed out, at exactly the same size.
+   Toggling display:none removed it from flow, so the first click of a
    double-click shifted every row down and the second click landed on the wrong
-   row — opening a task by double-click became nearly impossible. visibility
-   also makes the buttons non-interactive, so no stray clicks land on them. */
-#bulk-actions-bar.empty { visibility: hidden; background: transparent; border-bottom-color: transparent; }
+   row. visibility:hidden fixed the shift but left a blank strip; greying it out
+   keeps the layout identical while making the bar's purpose visible before
+   anything is selected. pointer-events:none means a stray click cannot land on
+   an inactive button. */
+#bulk-actions-bar.empty {
+  background: var(--bg-surface-2);
+  border-bottom-color: var(--border);
+  pointer-events: none;
+}
+#bulk-actions-bar.empty #bulk-actions-count { color: var(--text-muted); font-weight: 400; }
+#bulk-actions-bar.empty button {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
 #bulk-actions-count { color: var(--accent); font-weight: 600; }
 
 /* ── Dashboard ── */
