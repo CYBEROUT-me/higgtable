@@ -7,7 +7,7 @@
 // The user logs in manually, in Google's real login page. This module never
 // reads, stores, types, or transmits credentials.
 
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { PROBES, PREFLIGHT_PROBES } = require('./drive-probes');
@@ -1644,6 +1644,33 @@ async function signIn() {
 }
 
 
+// Forgets the Google session so a different account can be used. The sign-in
+// button can only ever CONFIRM an existing session — with valid cookies it
+// returns "already signed in" and never shows Google's account chooser — so
+// without this there is no way to switch accounts, and no way to reproduce the
+// signed-out state the sign-in flow is supposed to handle.
+//
+// This clears only this app's own partition. The user's Chrome/Firefox sessions
+// are untouched, and no credentials are read or stored at any point.
+async function signOut() {
+  if (inFlight) {
+    throw new Error('a Drive operation is already running — wait for it to finish before signing out');
+  }
+  inFlight = withDriveSession(async () => {
+    // Destroy the window first: a live Drive page owns the session and can
+    // rewrite cookies while it is being torn down.
+    if (driveWin && !driveWin.isDestroyed()) driveWin.destroy();
+    driveWin = null;
+
+    const partition = session.fromPartition(PARTITION);
+    await partition.clearStorageData();
+    await partition.clearCache();
+    logFn('signOut: cleared the Drive session for this app');
+    return { signedOut: true };
+  }).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
 // Public wrappers: every Drive operation runs inside withDriveSession so the
 // window is closed once nothing needs it.
 function uploadFolderToDrive(args) { return withDriveSession(() => do_uploadFolderToDrive(args)); }
@@ -1677,5 +1704,6 @@ module.exports = {
   uploadFolderToDrive,
   findFoldersByNames,
   signIn,
+  signOut,
   PARTITION,
 };

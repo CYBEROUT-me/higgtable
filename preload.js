@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('app', {
   driveUploadFolder: (payload)     => ipcRenderer.invoke('drive-upload-folder', payload),
   driveFindFolders:  (payload)     => ipcRenderer.invoke('drive-find-folders', payload),
   driveSignIn:       ()            => ipcRenderer.invoke('drive-sign-in'),
+  driveSignOut:      ()            => ipcRenderer.invoke('drive-sign-out'),
   driveProbeRows:    (folderId)    => ipcRenderer.invoke('drive-probe-rows', folderId),
   driveProbeMultiUpload: (folderId, paths, mode) =>
     ipcRenderer.invoke('drive-probe-multi-upload', folderId, paths, mode),

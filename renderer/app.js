@@ -2391,6 +2391,33 @@ document.getElementById('drive-signin-btn').addEventListener('click', async () =
   }
 });
 
+// Signing out is the only way to switch Google accounts: with valid cookies the
+// sign-in button just reports "already signed in" and never shows Google's
+// account chooser. Confirmed first, because it means signing in again.
+document.getElementById('drive-signout-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('drive-signout-btn');
+  const status = document.getElementById('drive-signin-status');
+  if (!confirm('Forget the Google Drive session for HiggTable?\n\nYou will need to sign in again before using "Link from Drive". Your browser sign-ins are not affected.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Signing out...';
+  try {
+    const r = await window.app.driveSignOut();
+    if (r && r.error) {
+      status.textContent = r.error;
+      status.className = 'signin-bad';
+    } else {
+      status.textContent = 'Signed out. Click "Sign in to Google Drive" to connect an account.';
+      status.className = '';
+    }
+  } catch (err) {
+    status.textContent = `Sign-out failed: ${err.message}`;
+    status.className = 'signin-bad';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign out';
+  }
+});
+
 document.getElementById('settings-save-btn');
   btn.disabled = true;
   try {

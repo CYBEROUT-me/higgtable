@@ -390,6 +390,16 @@ ipcMain.handle('drive-probe-rows', async (_e, folderId) => {
   }
 });
 
+ipcMain.handle('drive-sign-out', async () => {
+  try {
+    log('drive-sign-out: clearing the Drive session');
+    return await driveBrowser.signOut();
+  } catch (err) {
+    log(`drive-sign-out FAILED: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('drive-sign-in', async () => {
   try {
     log('drive-sign-in: opening the Drive window for the user');
