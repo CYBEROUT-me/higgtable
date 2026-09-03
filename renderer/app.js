@@ -826,12 +826,12 @@ function updateBulkActionsBar() {
 // drive, and whether a completion date is stamped — so they share one
 // implementation.
 //
-// "Date Done" is written ONLY when a task reaches "To accept": that field
-// records when work finished, and moving a task back into progress must not
-// claim it was completed today. An existing Date Done is left alone rather than
-// cleared, which is safe because the dashboard filters on Status first (see
+// Neither action touches "Date Done": that is stamped by Autofill, which is the
+// step that actually finishes a creative. A status change alone says nothing
+// about when the work was completed. An existing Date Done is left alone rather
+// than cleared, which is safe because the dashboard filters on Status first (see
 // buildDashboardData) so a task back in progress is excluded either way.
-async function markSelectedAs(status, { btnId, label, stampDateDone }) {
+async function markSelectedAs(status, { btnId, label }) {
   if (!state.selectedIds.size) return;
   const tableInfo = state.tables[state.activeTable];
   if (!tableInfo) return;
@@ -840,9 +840,7 @@ async function markSelectedAs(status, { btnId, label, stampDateDone }) {
   const btn = document.getElementById(btnId);
   if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
   try {
-    const fields = { Status: status };
-    if (stampDateDone) fields['Date Done'] = toISO(new Date());
-    const updates = ids.map(id => ({ id, fields: { ...fields } }));
+    const updates = ids.map(id => ({ id, fields: { Status: status } }));
     const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
     const byId = new Map(results.map(r => [r.id, r]));
     state.records.forEach(rec => {
@@ -864,13 +862,13 @@ async function markSelectedAs(status, { btnId, label, stampDateDone }) {
 
 async function markSelectedAsToAccept() {
   return markSelectedAs('To accept', {
-    btnId: 'bulk-mark-accept-btn', label: 'Mark as To Accept', stampDateDone: true,
+    btnId: 'bulk-mark-accept-btn', label: 'Mark as To Accept',
   });
 }
 
 async function markSelectedAsInWork() {
   return markSelectedAs('In work', {
-    btnId: 'bulk-mark-inwork-btn', label: 'Mark as In Work', stampDateDone: false,
+    btnId: 'bulk-mark-inwork-btn', label: 'Mark as In Work',
   });
 }
 
@@ -1176,6 +1174,75 @@ function closeFieldSettings() {
 const PINNED_GRID_FIELDS = ['Hours', 'Date Done', 'Timing'];
 const PINNED_STACK_FIELDS = ['Preview', 'Creative Link', 'Figma/Canvas link'];
 
+// ── Description → referenced task links ──────────────────────────────────
+
+// Every cached record across all tables, flattened for reference matching: a
+// Description in one table routinely points at a task in another.
+function allCachedRecordsForRefs() {
+  const out = [];
+  const seen = new Set();
+  TARGET_TABLES.forEach(table => {
+    (recordsCache[table] || []).forEach(r => {
+      if (seen.has(r.id)) return;
+      seen.add(r.id);
+      out.push({ id: r.id, name: r.fields['Name'] || '', format: r.fields['Format'] || '', rec: r, table });
+    });
+  });
+  return out;
+}
+
+// Adds one button per referenced task found in a Description. A shorthand like
+// "PL_6940" can match several variants, so every match gets its own button
+// labelled with the full name — the alternative, opening the "best" match,
+// silently sends the user to the wrong creative.
+function appendTaskRefLinks(row, text, currentRecordId) {
+  const refs = extractTaskRefs(text);
+  if (!refs.length) return;
+
+  const pool = allCachedRecordsForRefs();
+  const buttons = [];
+  const usedIds = new Set();
+
+  refs.forEach(ref => {
+    matchRefToRecords(ref, pool).forEach(match => {
+      if (match.id === currentRecordId || usedIds.has(match.id)) return;
+      usedIds.add(match.id);
+      buttons.push({ ref, match });
+    });
+  });
+  if (!buttons.length) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'task-ref-links';
+
+  buttons.forEach(({ match }) => {
+    const fieldName = resolveFieldName(
+      (state.tables[match.table]?.fields || []).map(f => f.name),
+      linkFieldForRecord(match),
+    );
+    const url = fieldName ? String(match.rec.fields[fieldName] || '').trim() : '';
+    const kind = linkFieldForRecord(match) === FIGMA_LINK_FIELD ? 'Figma' : 'Drive';
+
+    const btn = document.createElement('button');
+    btn.className = 'task-ref-link';
+    btn.textContent = `${kind} ↗ ${match.name}`;
+    if (url) {
+      btn.title = `Open ${fieldName} for ${match.name}`;
+      btn.onclick = () => window.app.openExternal(rewriteDriveLink(url, state.driveAccountIndex));
+    } else {
+      // Shown but inert: knowing the referenced task has no link yet is more
+      // useful than the button silently not appearing.
+      btn.disabled = true;
+      btn.title = fieldName
+        ? `${match.name} has no ${fieldName} yet`
+        : `${match.table} has no ${linkFieldForRecord(match)} field`;
+    }
+    wrap.appendChild(btn);
+  });
+
+  row.appendChild(wrap);
+}
+
 function renderRecordModal(rec, tableName) {
   document.getElementById('record-modal-title').textContent = rec.fields['Name'] || 'Task details';
   const body = document.getElementById('record-modal-body');
@@ -1203,6 +1270,9 @@ function renderRecordModal(rec, tableName) {
     valueEl.className = 'record-field-value';
     valueEl.appendChild(buildFieldInput(rec, tableName, field, rec.fields[field.name]));
     row.appendChild(valueEl);
+    if (/description/i.test(field.name)) {
+      appendTaskRefLinks(valueEl, rec.fields[field.name], rec.id);
+    }
     container.appendChild(row);
   };
 
@@ -2164,6 +2234,22 @@ async function renderAutofillApprovalList() {
   const list = document.getElementById('autofill-approval-list');
   list.innerHTML = '';
 
+  // The shared Figma/Canvas link only makes sense for "Stat" creatives, which
+  // are delivered as a board rather than a Drive folder. It is offered whenever
+  // the batch contains any, and written only to those — writing a Figma board
+  // onto a Video task would be wrong data, and the note below makes the scope
+  // explicit before anything is applied.
+  const statCount = pendingAutofillCandidates.filter(isStatCandidate).length;
+  const figmaRow = document.getElementById('autofill-figma-row');
+  const figmaInput = document.getElementById('autofill-figma-link');
+  figmaRow.classList.toggle('hidden', statCount === 0);
+  if (statCount === 0) {
+    figmaInput.value = '';
+  } else {
+    document.getElementById('autofill-figma-note').textContent =
+      `optional — applied to ${statCount} Stat task${statCount === 1 ? '' : 's'}`;
+  }
+
   const thumbs = await Promise.all(pendingAutofillCandidates.map(c =>
     c.preview ? window.app.readImageDataUrl(c.preview.path).catch(() => null) : Promise.resolve(null)
   ));
@@ -2229,21 +2315,47 @@ function closeAutofillModal() {
   pendingAutofillCandidates = [];
 }
 
+// True when a task's deliverable is a Figma/Canvas board rather than a Drive
+// folder. Format is authoritative, with the name as a fallback — same rule the
+// Description link buttons use.
+function isStatCandidate(c) {
+  return linkFieldForRecord({ format: c.rec.fields['Format'], name: c.rec.fields['Name'] }) === FIGMA_LINK_FIELD;
+}
+
 async function confirmAutofill() {
   const toUpload = pendingAutofillCandidates.filter(c => c.preview?.include && c.preview.path);
   const toSetTiming = pendingAutofillCandidates.filter(c => c.timing?.include && c.timing.choice);
-  if (!toUpload.length && !toSetTiming.length) { closeAutofillModal(); return; }
+
+  const figmaLink = (document.getElementById('autofill-figma-link').value || '').trim();
+  const statCandidates = figmaLink ? pendingAutofillCandidates.filter(isStatCandidate) : [];
+
+  // Resolve the field against the table's real schema rather than assuming the
+  // name, so a differently-spelled column fails loudly instead of silently
+  // dropping the link.
+  const tableInfo = state.tables[state.activeTable];
+  const figmaField = figmaLink
+    ? resolveFieldName((tableInfo?.fields || []).map(f => f.name), FIGMA_LINK_FIELD)
+    : null;
+  if (figmaLink && !figmaField) {
+    alert(`This table has no "${FIGMA_LINK_FIELD}" field, so the link cannot be saved.\n\nNothing was written.`);
+    return;
+  }
+
+  if (!toUpload.length && !toSetTiming.length && !statCandidates.length) { closeAutofillModal(); return; }
 
   const btn = document.getElementById('autofill-approval-confirm-btn');
   btn.disabled = true;
   btn.textContent = 'Applying...';
-  let uploaded = 0, uploadFailed = 0, timed = 0;
+  let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0;
   try {
+    // Attachments go one at a time — the upload endpoint takes a single file.
+    const uploadedOk = [];
     for (const c of toUpload) {
       try {
         const result = await window.airtable.uploadAttachment(state.baseId, c.rec.id, 'Preview', c.preview.path);
         c.rec.fields['Preview'] = result.fields['Preview'];
         uploaded++;
+        uploadedOk.push(c);
         log(`confirmAutofill: uploaded ${c.preview.path} to ${c.rec.fields['Name']}`);
       } catch (err) {
         uploadFailed++;
@@ -2251,26 +2363,53 @@ async function confirmAutofill() {
       }
     }
 
-    if (toSetTiming.length) {
-      const tableInfo = state.tables[state.activeTable];
-      const updates = toSetTiming.map(c => ({ id: c.rec.id, fields: { Timing: c.timing.choice } }));
+    // Everything else lands in ONE batched update per record: Timing, the shared
+    // Figma/Canvas link, and "Date Done". Date Done is stamped on every record
+    // this run actually writes to — a failed preview upload does not count, so a
+    // task is never dated as finished when nothing was delivered.
+    const today = toISO(new Date());
+    const pending = new Map();
+    const addFields = (c, fields) => {
+      const entry = pending.get(c.rec.id) || { c, fields: {} };
+      Object.assign(entry.fields, fields);
+      pending.set(c.rec.id, entry);
+    };
+    toSetTiming.forEach(c => addFields(c, { Timing: c.timing.choice }));
+    statCandidates.forEach(c => addFields(c, { [figmaField]: figmaLink }));
+    [...uploadedOk, ...toSetTiming, ...statCandidates].forEach(c => addFields(c, { 'Date Done': today }));
+
+    if (pending.size && tableInfo) {
+      const entries = [...pending.values()];
       try {
-        const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
+        const results = await window.airtable.updateRecords(
+          state.baseId, tableInfo.id,
+          entries.map(e => ({ id: e.c.rec.id, fields: e.fields })),
+        );
         const byId = new Map(results.map(r => [r.id, r]));
-        toSetTiming.forEach(c => {
-          const updated = byId.get(c.rec.id);
-          if (updated) c.rec.fields = updated.fields;
+        entries.forEach(e => {
+          const updated = byId.get(e.c.rec.id);
+          if (updated) e.c.rec.fields = updated.fields;
         });
-        timed = results.length;
-        log(`confirmAutofill: set Timing on ${timed} record(s)`);
+        timed = toSetTiming.length;
+        linked = statCandidates.length;
+        dated = entries.length;
+        log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, ${FIGMA_LINK_FIELD} ${linked}, Date Done ${dated}`);
       } catch (err) {
-        log(`confirmAutofill: Timing update FAILED — ${err.message}`);
+        log(`confirmAutofill: batched update FAILED — ${err.message}`);
+        alert(`Previews uploaded, but the Timing / link / Date Done update failed:\n\n${err.message}`);
       }
     }
 
     render();
     maybeRefreshDashboard();
-    alert(`Autofill done.\n\nPreviews uploaded: ${uploaded}${uploadFailed ? `\nPreview upload failed: ${uploadFailed}` : ''}\nTiming set: ${timed}`);
+    const lines = [
+      `Previews uploaded: ${uploaded}`,
+      uploadFailed ? `Preview upload failed: ${uploadFailed}` : null,
+      `Timing set: ${timed}`,
+      linked ? `${FIGMA_LINK_FIELD} set: ${linked}` : null,
+      `Date Done set: ${dated}`,
+    ].filter(Boolean);
+    alert(`Autofill done.\n\n${lines.join('\n')}`);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Apply Selected';

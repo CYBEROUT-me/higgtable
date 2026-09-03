@@ -232,6 +232,11 @@
     <div class="modal-box autofill-approval-box">
       <h2>Confirm Autofill</h2>
       <p>Uncheck any wrong matches, then confirm to write to Airtable.</p>
+      <div id="autofill-figma-row" class="hidden">
+        <label for="autofill-figma-link">Figma/Canvas link</label>
+        <input type="text" id="autofill-figma-link" placeholder="https://www.figma.com/...">
+        <span id="autofill-figma-note"></span>
+      </div>
       <div id="autofill-approval-list"></div>
       <div class="modal-actions">
         <button id="autofill-approval-confirm-btn" class="primary">Apply Selected</button>
@@ -247,6 +252,7 @@
   <script src="drive-path.js"></script>
   <script src="drive-bulk.js"></script>
   <script src="drive-link.js"></script>
+  <script src="task-refs.js"></script>
   <script src="autofill-data.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>

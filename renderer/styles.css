@@ -337,3 +337,15 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 }
 #drive-signin-status.signin-ok { color: var(--accent); }
 #drive-signin-status.signin-bad { color: #d29922; }
+
+/* Autofill: shared Figma/Canvas link for a batch of Stat creatives */
+#autofill-figma-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
+#autofill-figma-row label { color: var(--text-secondary); font-size: 12px; flex-shrink: 0; }
+#autofill-figma-row input { flex: 1; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 12px; }
+#autofill-figma-note { color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+
+/* Description → referenced task link buttons */
+.task-ref-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.task-ref-link { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; padding: var(--space-1) var(--space-3); font-family: monospace; }
+.task-ref-link:not(:disabled) { border-color: var(--accent-strong); color: var(--accent); }
+.task-ref-link:disabled { color: var(--text-muted); cursor: default; opacity: 0.6; }
