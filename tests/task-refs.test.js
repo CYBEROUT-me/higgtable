@@ -27,6 +27,17 @@ describe('extractTaskRefs', () => {
     expect(extractTaskRefs('see https://drive.google.com/drive/folders/1TxF-tFETE')).toEqual([]);
   });
 
+  test('finds a reference whose underscores are markdown-escaped', () => {
+    // Airtable stores long text with escaped punctuation, so this is the form a
+    // Description actually arrives in. Before unescaping, nothing matched.
+    const escaped = 'OL\\_10838\\_10835\\_М0\\_S1251\\_EN\\_usr\\_KRU\\_VER\\_Video\\_VAR\\_9x16';
+    expect(extractTaskRefs(escaped)).toEqual(['OL_10838_10835_М0_S1251_EN_usr_KRU_VER_Video_VAR_9x16']);
+  });
+
+  test('finds an escaped shorthand reference', () => {
+    expect(extractTaskRefs('based on OL\\_10838')).toEqual(['OL_10838']);
+  });
+
   test('finds a shorthand reference', () => {
     expect(extractTaskRefs('based on PL_6940')).toEqual(['PL_6940']);
   });

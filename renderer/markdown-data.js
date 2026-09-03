@@ -47,16 +47,31 @@ function linkifyUrls(html) {
   });
 }
 
+// Airtable escapes markdown punctuation when it stores long text, so a task name
+// arrives as "OL\\_10838\\_10835\\_М0..." and used to render with every backslash
+// visible. Unescaping runs LAST, after bold and links have been interpreted, so
+// a deliberately escaped "\\*" survives as a literal asterisk rather than turning
+// into emphasis. Only markdown's own escapable punctuation is unescaped — a lone
+// backslash in prose is left alone.
+function unescapePunctuation(html) {
+  return html.replace(/\\([\\_*[\]()~`>#+\-=|{}.!])/g, '$1');
+}
+
 // Minimal markdown-lite renderer for long text fields (Description, etc.) —
 // HTML-escaping, bare-URL links, **bold**, and line breaks, matching how
 // these fields are actually written in Airtable, without pulling in a full
 // markdown library.
 function renderMarkdownLite(text) {
-  return linkifyUrls(linkifyMarkdownLinks(escapeHtml(text)))
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>');
+  return unescapePunctuation(
+    linkifyUrls(linkifyMarkdownLinks(escapeHtml(text)))
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>'),
+  );
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { escapeHtml, linkifyUrls, renderMarkdownLite, unescapeBackslashes, linkifyMarkdownLinks };
+  module.exports = {
+    escapeHtml, linkifyUrls, renderMarkdownLite, unescapeBackslashes,
+    linkifyMarkdownLinks, unescapePunctuation,
+  };
 }

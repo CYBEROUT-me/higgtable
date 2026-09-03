@@ -18,9 +18,17 @@ const FIGMA_LINK_FIELD = 'Figma/Canvas link';
 // Latin M), so restricting to [A-Za-z0-9] would silently truncate them.
 const TASK_REF_PATTERN = /[A-Za-z]{2,4}_\d+(?:_[^\s,;:()[\]{}"'<>]+)*/g;
 
+// Airtable escapes markdown punctuation in stored long text, so a reference
+// arrives as "OL\\_10838\\_10835\\_М0..." — the underscores the pattern relies on are
+// each preceded by a backslash, and matching would find nothing at all. Undo
+// that first, on a copy, so the extracted reference is the real task name.
+function unescapeRefText(text) {
+  return String(text || '').replace(/\\([\\_*[\]()~`>#+\-=|{}.!])/g, '$1');
+}
+
 function extractTaskRefs(text) {
   const out = [];
-  for (const m of String(text || '').matchAll(TASK_REF_PATTERN)) {
+  for (const m of unescapeRefText(text).matchAll(TASK_REF_PATTERN)) {
     // Trailing dots and dashes come from prose ("see PL_6940."), not the name.
     const ref = m[0].replace(/[.,;:\-–—]+$/, '');
     if (ref && !out.includes(ref)) out.push(ref);
@@ -73,5 +81,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CREATIVE_LINK_FIELD, FIGMA_LINK_FIELD, TASK_REF_PATTERN,
     extractTaskRefs, matchRefToRecords, linkFieldForRecord, resolveFieldName,
+    unescapeRefText,
   };
 }

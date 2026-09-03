@@ -67,3 +67,26 @@ test('a bare URL alongside a labeled link is not double-wrapped and still linkif
     '<a href="https://example.com/a" class="record-markdown-link">Drive</a> also see <a href="https://example.com/b" class="record-markdown-link">https://example.com/b</a>'
   );
 });
+
+// Airtable escapes markdown punctuation when storing long text, so task names
+// arrived on screen with every underscore backslashed.
+describe('markdown-escaped punctuation', () => {
+  test('an escaped task name renders without backslashes', () => {
+    const escaped = 'OL\\_10838\\_10835\\_М0\\_S1251\\_EN\\_usr\\_KRU\\_VER\\_Video\\_VAR\\_9x16';
+    expect(renderMarkdownLite(escaped)).toBe('OL_10838_10835_М0_S1251_EN_usr_KRU_VER_Video_VAR_9x16');
+  });
+
+  test('real bold still renders', () => {
+    expect(renderMarkdownLite('**bold**')).toBe('<strong>bold</strong>');
+  });
+
+  test('an escaped asterisk stays a literal asterisk', () => {
+    expect(renderMarkdownLite('literal \\* asterisk')).toBe('literal * asterisk');
+  });
+
+  test('an escaped name inside a markdown link keeps working', () => {
+    const html = renderMarkdownLite('[OL\\_10838\\_X](https://example.com/a)');
+    expect(html).toContain('>OL_10838_X<');
+    expect(html).toContain('href="https://example.com/a"');
+  });
+});
