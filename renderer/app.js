@@ -1240,7 +1240,10 @@ function appendTaskRefLinks(row, text, currentRecordId) {
     wrap.appendChild(btn);
   });
 
-  row.appendChild(wrap);
+  // Placed ABOVE the field, not after it: a Description box is often several
+  // hundred pixels tall, so buttons appended below it sit off-screen and read as
+  // missing. Here they land right beside the "Description" label.
+  row.insertBefore(wrap, row.firstChild);
 }
 
 function renderRecordModal(rec, tableName) {

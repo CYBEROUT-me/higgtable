@@ -16,6 +16,17 @@ describe('extractTaskRefs', () => {
     expect(extractTaskRefs(FULL)[0]).toContain('М689');
   });
 
+  test('finds a reference that is wrapped in a markdown link', () => {
+    // Descriptions often carry the task name as a link label, which is how the
+    // reference reaches the user's screen underlined and green.
+    const md = `Розвиток norm TT\n[${FULL}](https://airtable.com/appETF/tblDdV/viwTeO/recABC)\nВсе інше без змін`;
+    expect(extractTaskRefs(md)).toEqual([FULL]);
+  });
+
+  test('does not mistake a URL for a task reference', () => {
+    expect(extractTaskRefs('see https://drive.google.com/drive/folders/1TxF-tFETE')).toEqual([]);
+  });
+
   test('finds a shorthand reference', () => {
     expect(extractTaskRefs('based on PL_6940')).toEqual(['PL_6940']);
   });
