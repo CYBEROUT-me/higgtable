@@ -1181,13 +1181,16 @@ const PINNED_STACK_FIELDS = ['Preview', 'Creative Link', 'Figma/Canvas link'];
 function allCachedRecordsForRefs() {
   const out = [];
   const seen = new Set();
-  TARGET_TABLES.forEach(table => {
-    (recordsCache[table] || []).forEach(r => {
-      if (seen.has(r.id)) return;
-      seen.add(r.id);
-      out.push({ id: r.id, name: r.fields['Name'] || '', format: r.fields['Format'] || '', rec: r, table });
-    });
-  });
+  const add = (r, table) => {
+    if (!r || seen.has(r.id)) return;
+    seen.add(r.id);
+    out.push({ id: r.id, name: r.fields['Name'] || '', format: r.fields['Format'] || '', rec: r, table });
+  };
+  // The active table's rows live in state.records while it is still loading —
+  // recordsCache is only filled in once a load finishes, and a full load takes
+  // minutes, so relying on the cache alone misses the table in front of you.
+  (state.records || []).forEach(r => add(r, state.activeTable));
+  TARGET_TABLES.forEach(table => (recordsCache[table] || []).forEach(r => add(r, table)));
   return out;
 }
 
@@ -1195,7 +1198,7 @@ function allCachedRecordsForRefs() {
 // "PL_6940" can match several variants, so every match gets its own button
 // labelled with the full name — the alternative, opening the "best" match,
 // silently sends the user to the wrong creative.
-function appendTaskRefLinks(row, text, currentRecordId) {
+function appendTaskRefLinks(container, text, currentRecordId) {
   const refs = extractTaskRefs(text);
   if (!refs.length) return;
 
@@ -1203,14 +1206,17 @@ function appendTaskRefLinks(row, text, currentRecordId) {
   const buttons = [];
   const usedIds = new Set();
 
+  const unmatched = [];
   refs.forEach(ref => {
-    matchRefToRecords(ref, pool).forEach(match => {
-      if (match.id === currentRecordId || usedIds.has(match.id)) return;
+    const hits = matchRefToRecords(ref, pool).filter(m => m.id !== currentRecordId);
+    if (!hits.length) { unmatched.push(ref); return; }
+    hits.forEach(match => {
+      if (usedIds.has(match.id)) return;
       usedIds.add(match.id);
       buttons.push({ ref, match });
     });
   });
-  if (!buttons.length) return;
+  if (!buttons.length && !unmatched.length) return;
 
   const wrap = document.createElement('div');
   wrap.className = 'task-ref-links';
@@ -1240,10 +1246,23 @@ function appendTaskRefLinks(row, text, currentRecordId) {
     wrap.appendChild(btn);
   });
 
+  // A reference that matches nothing still gets a chip. Rendering nothing at all
+  // is indistinguishable from the feature being broken — this says whether the
+  // task is simply not loaded yet, which is common while a table is still
+  // fetching, or genuinely absent.
+  unmatched.forEach(ref => {
+    const chip = document.createElement('button');
+    chip.className = 'task-ref-link';
+    chip.textContent = `? ${ref}`;
+    chip.disabled = true;
+    chip.title = `No task named "${ref}" among the ${pool.length} records loaded so far — it may still be loading, or live in a table that is not open.`;
+    wrap.appendChild(chip);
+  });
+
   // Placed ABOVE the field, not after it: a Description box is often several
   // hundred pixels tall, so buttons appended below it sit off-screen and read as
   // missing. Here they land right beside the "Description" label.
-  row.insertBefore(wrap, row.firstChild);
+  container.insertBefore(wrap, container.firstChild);
 }
 
 function renderRecordModal(rec, tableName) {
