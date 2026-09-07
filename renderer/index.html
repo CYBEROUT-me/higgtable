@@ -70,6 +70,11 @@
     <div id="header-filters">
       <div id="status-filters"></div>
       <div id="header-filters-right">
+        <div id="task-search-control">
+          <input type="text" id="task-search" placeholder="Search tasks…" autocomplete="off" spellcheck="false"
+                 title="Search every loaded table by task name (Cmd/Ctrl+F)">
+          <div id="task-search-results" class="hidden"></div>
+        </div>
         <div id="des-control">
           <span>You:</span>
           <select id="des-select"><option value="">All</option></select>
@@ -237,6 +242,12 @@
         <input type="text" id="autofill-figma-link" placeholder="https://www.figma.com/...">
         <span id="autofill-figma-note"></span>
       </div>
+      <div id="autofill-links-row">
+        <label for="autofill-links">Creative Links — one per task, paired in name order</label>
+        <textarea id="autofill-links" rows="3" placeholder="Paste links separated by commas, spaces or newlines…" spellcheck="false"></textarea>
+        <div id="autofill-links-warning"></div>
+        <div id="autofill-links-pairs"></div>
+      </div>
       <div id="autofill-approval-list"></div>
       <div class="modal-actions">
         <button id="autofill-approval-confirm-btn" class="primary">Apply Selected</button>
@@ -253,6 +264,8 @@
   <script src="drive-bulk.js"></script>
   <script src="drive-link.js"></script>
   <script src="task-refs.js"></script>
+  <script src="task-search.js"></script>
+  <script src="link-paste.js"></script>
   <script src="autofill-data.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>

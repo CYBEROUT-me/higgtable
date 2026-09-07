@@ -1615,6 +1615,75 @@ function flashFieldStatus(el, kind, errMsg) {
   }
 }
 
+// ── Task search ──────────────────────────────────────────────────────────
+
+// Searches every loaded table, so a task can be found without knowing which tab
+// it lives in. Reuses goToRecord, which already switches tab, re-enables the
+// task's Status chip (otherwise the current filter would hide the row it just
+// jumped to) and highlights the row.
+function renderTaskSearchResults() {
+  const input = document.getElementById('task-search');
+  const box = document.getElementById('task-search-results');
+  const hits = searchTasks(input.value, allCachedRecordsForRefs(), { limit: 25 });
+
+  box.innerHTML = '';
+  if (!input.value.trim()) { box.classList.add('hidden'); return; }
+
+  if (!hits.length) {
+    const empty = document.createElement('div');
+    empty.className = 'task-search-empty';
+    empty.textContent = normalizeForSearch(input.value).length < MIN_QUERY_LENGTH
+      ? `Type at least ${MIN_QUERY_LENGTH} characters`
+      : 'No task found in the loaded tables';
+    box.appendChild(empty);
+    box.classList.remove('hidden');
+    return;
+  }
+
+  hits.forEach(hit => {
+    const row = document.createElement('div');
+    row.className = 'task-search-row';
+
+    const open = document.createElement('button');
+    open.className = 'task-search-open';
+    open.textContent = hit.name;
+    open.title = `Open ${hit.name} in ${hit.table}`;
+    open.onclick = () => {
+      closeTaskSearch();
+      goToRecord(hit.rec, hit.table);
+      openRecordModal(hit.rec, hit.table);
+    };
+    row.appendChild(open);
+
+    const tableTag = document.createElement('span');
+    tableTag.className = 'task-search-table';
+    tableTag.textContent = hit.table.replace(/ Creatives$/, '');
+    row.appendChild(tableTag);
+
+    const lineage = document.createElement('button');
+    lineage.className = 'task-search-lineage';
+    lineage.textContent = '🕸';
+    lineage.title = `Open this task's lineage in Canvas`;
+    lineage.onclick = () => {
+      closeTaskSearch();
+      // Canvas builds lineages from the ACTIVE table's records, so the tab has
+      // to change first or the lineage would be looked up in the wrong table.
+      if (state.activeTable !== hit.table) goToRecord(hit.rec, hit.table);
+      openLineageFor(hit.rec);
+    };
+    row.appendChild(lineage);
+
+    box.appendChild(row);
+  });
+  box.classList.remove('hidden');
+}
+
+function closeTaskSearch({ clear = false } = {}) {
+  const box = document.getElementById('task-search-results');
+  box.classList.add('hidden');
+  if (clear) document.getElementById('task-search').value = '';
+}
+
 // ── Task selection & rename panel ────────────────────────────────────────
 
 // Finder-style multi-select: plain click still picks a single task for
@@ -2252,6 +2321,110 @@ async function openAutofillModal() {
   }
 }
 
+// Pairing state for the pasted Creative Links, rebuilt on every keystroke in the
+// textarea and read back by confirmAutofill.
+let pendingLinkPairs = [];
+
+function creativeLinkFieldName() {
+  return resolveFieldName(
+    (state.tables[state.activeTable]?.fields || []).map(f => f.name),
+    CREATIVE_LINK_FIELD,
+  );
+}
+
+// Renders the task ↔ link pairing for review. Every pair is shown with a
+// checkbox, and a task that already holds a link keeps its position in the
+// order — dropping it would shift every later link onto the wrong task — but
+// arrives unticked with its current link visible.
+function renderLinkPairs() {
+  const textarea = document.getElementById('autofill-links');
+  const warning = document.getElementById('autofill-links-warning');
+  const listEl = document.getElementById('autofill-links-pairs');
+  const field = creativeLinkFieldName();
+
+  listEl.innerHTML = '';
+  warning.textContent = '';
+  pendingLinkPairs = [];
+
+  const raw = textarea.value.trim();
+  if (!raw) return;
+
+  if (!field) {
+    warning.textContent = `This table has no "${CREATIVE_LINK_FIELD}" field — links cannot be saved.`;
+    warning.className = 'links-bad';
+    return;
+  }
+
+  const parsed = parseLinkList(textarea.value);
+  const tasks = pendingAutofillCandidates.map(c => ({
+    id: c.rec.id,
+    name: c.rec.fields['Name'] || '',
+    existingLink: c.rec.fields[field] || '',
+    candidate: c,
+  }));
+  const paired = pairLinksToTasks(tasks, parsed.links);
+
+  const note = describeMismatch(paired, parsed);
+  warning.textContent = note || `${paired.pairs.length} link(s) paired — counts match.`;
+  warning.className = note ? 'links-warn' : 'links-ok';
+
+  paired.pairs.forEach(pair => {
+    const state_ = { ...pair, include: !pair.hasExisting };
+    pendingLinkPairs.push(state_);
+
+    const row = document.createElement('label');
+    row.className = 'link-pair-row' + (pair.hasExisting ? ' has-existing' : '');
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state_.include;
+    cb.onchange = () => { state_.include = cb.checked; };
+    row.appendChild(cb);
+
+    const name = document.createElement('span');
+    name.className = 'link-pair-task';
+    name.textContent = pair.task.name;
+    row.appendChild(name);
+
+    const link = document.createElement('span');
+    link.className = 'link-pair-url';
+    link.textContent = pair.link;
+    link.title = pair.link;
+    row.appendChild(link);
+
+    if (pair.hasExisting) {
+      const flag = document.createElement('span');
+      flag.className = 'link-pair-flag';
+      flag.textContent = 'already has a link';
+      flag.title = pair.existingLink;
+      row.appendChild(flag);
+    }
+    listEl.appendChild(row);
+  });
+
+  paired.tasksWithoutLink.forEach(task => {
+    const row = document.createElement('div');
+    row.className = 'link-pair-row link-pair-missing';
+    row.textContent = `${task.name} — no link`;
+    listEl.appendChild(row);
+  });
+
+  paired.unusedLinks.forEach(link => {
+    const row = document.createElement('div');
+    row.className = 'link-pair-row link-pair-missing';
+    row.textContent = `unused link — ${link}`;
+    row.title = link;
+    listEl.appendChild(row);
+  });
+
+  parsed.invalid.forEach(entry => {
+    const row = document.createElement('div');
+    row.className = 'link-pair-row link-pair-missing';
+    row.textContent = `not a URL — ${entry}`;
+    listEl.appendChild(row);
+  });
+}
+
 async function renderAutofillApprovalList() {
   const list = document.getElementById('autofill-approval-list');
   list.innerHTML = '';
@@ -2261,6 +2434,11 @@ async function renderAutofillApprovalList() {
   // the batch contains any, and written only to those — writing a Figma board
   // onto a Video task would be wrong data, and the note below makes the scope
   // explicit before anything is applied.
+  // A fresh batch starts with an empty paste box: carrying links over from a
+  // previous run would pair them against different tasks.
+  document.getElementById('autofill-links').value = '';
+  renderLinkPairs();
+
   const statCount = pendingAutofillCandidates.filter(isStatCandidate).length;
   const figmaRow = document.getElementById('autofill-figma-row');
   const figmaInput = document.getElementById('autofill-figma-link');
@@ -2363,12 +2541,23 @@ async function confirmAutofill() {
     return;
   }
 
-  if (!toUpload.length && !toSetTiming.length && !statCandidates.length) { closeAutofillModal(); return; }
+  const linkPairs = pendingLinkPairs.filter(p => p.include && p.link);
+  const creativeField = linkPairs.length ? creativeLinkFieldName() : null;
+  if (linkPairs.length && !creativeField) {
+    alert(`This table has no "${CREATIVE_LINK_FIELD}" field, so the pasted links cannot be saved.\n\nNothing was written.`);
+    return;
+  }
 
-  const btn = document.getElementById('autofill-approval-confirm-btn');
+  if (!toUpload.length && !toSetTiming.length && !statCandidates.length && !linkPairs.length) {
+    closeAutofillModal();
+    return;
+  }
+
+  const btn = document.getElementById('autofill-links').addEventListener('input', renderLinkPairs);
+document.getElementById('autofill-approval-confirm-btn');
   btn.disabled = true;
   btn.textContent = 'Applying...';
-  let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0;
+  let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0, creativeLinked = 0;
   try {
     // Attachments go one at a time — the upload endpoint takes a single file.
     const uploadedOk = [];
@@ -2398,7 +2587,9 @@ async function confirmAutofill() {
     };
     toSetTiming.forEach(c => addFields(c, { Timing: c.timing.choice }));
     statCandidates.forEach(c => addFields(c, { [figmaField]: figmaLink }));
-    [...uploadedOk, ...toSetTiming, ...statCandidates].forEach(c => addFields(c, { 'Date Done': today }));
+    linkPairs.forEach(p => addFields(p.task.candidate, { [creativeField]: p.link }));
+    [...uploadedOk, ...toSetTiming, ...statCandidates, ...linkPairs.map(p => p.task.candidate)]
+      .forEach(c => addFields(c, { 'Date Done': today }));
 
     if (pending.size && tableInfo) {
       const entries = [...pending.values()];
@@ -2414,8 +2605,9 @@ async function confirmAutofill() {
         });
         timed = toSetTiming.length;
         linked = statCandidates.length;
+        creativeLinked = linkPairs.length;
         dated = entries.length;
-        log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, ${FIGMA_LINK_FIELD} ${linked}, Date Done ${dated}`);
+        log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, ${FIGMA_LINK_FIELD} ${linked}, ${CREATIVE_LINK_FIELD} ${creativeLinked}, Date Done ${dated}`);
       } catch (err) {
         log(`confirmAutofill: batched update FAILED — ${err.message}`);
         alert(`Previews uploaded, but the Timing / link / Date Done update failed:\n\n${err.message}`);
@@ -2429,6 +2621,7 @@ async function confirmAutofill() {
       uploadFailed ? `Preview upload failed: ${uploadFailed}` : null,
       `Timing set: ${timed}`,
       linked ? `${FIGMA_LINK_FIELD} set: ${linked}` : null,
+      creativeLinked ? `${CREATIVE_LINK_FIELD} set: ${creativeLinked}` : null,
       `Date Done set: ${dated}`,
     ].filter(Boolean);
     alert(`Autofill done.\n\n${lines.join('\n')}`);
@@ -2660,6 +2853,33 @@ document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-autofill-btn').disabled) return;
   openAutofillModal();
 });
+const taskSearchInput = document.getElementById('task-search');
+taskSearchInput.addEventListener('input', renderTaskSearchResults);
+taskSearchInput.addEventListener('focus', renderTaskSearchResults);
+taskSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeTaskSearch({ clear: true }); taskSearchInput.blur(); return; }
+  if (e.key === 'Enter') {
+    const first = document.querySelector('#task-search-results .task-search-open');
+    if (first) first.click();
+  }
+});
+// Clicking anywhere else dismisses the results without clearing the query, so
+// the search can be reopened by focusing the box again.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#task-search-control')) closeTaskSearch();
+});
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return;
+  // The search box sits in the header, behind any open modal — focusing it from
+  // under a dialog would look like the shortcut did nothing.
+  const modalOpen = [...document.querySelectorAll('.modal-overlay')]
+    .some(m => !m.classList.contains('hidden'));
+  if (modalOpen) return;
+  e.preventDefault();
+  taskSearchInput.focus();
+  taskSearchInput.select();
+});
+
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   // Also close the rename panel: a single click selects the task AND opens the
   // panel, so clearing only the selection would leave the panel sitting over a
