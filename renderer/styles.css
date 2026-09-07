@@ -379,3 +379,4 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .link-pair-flag { flex-shrink: 0; color: #d29922; font-size: 10px; }
 .link-pair-row.has-existing .link-pair-task { color: var(--text-secondary); }
 .link-pair-missing { color: var(--text-muted); font-style: italic; }
+.link-pair-index { flex-shrink: 0; color: var(--text-muted); font-size: 10px; min-width: 18px; text-align: right; }

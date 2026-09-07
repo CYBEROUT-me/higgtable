@@ -90,3 +90,22 @@ describe('searchTasks', () => {
     expect(searchTasks('cmc', [{ id: 'x' }])).toEqual([]);
   });
 });
+
+// The exact batch and order the Autofill modal must present, since links are
+// paired positionally against it.
+test('the reference CMC batch sorts into the order links are paired against', () => {
+  const unsorted = [
+    'CMC_2222_2218_A621_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2218_2218_M247_S0_EN_usr_ELI_PRI_Stat_NEW_9x16',
+    'CMC_2220_2218_A786_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2219_2218_A816_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2221_2218_A739_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+  ];
+  expect([...unsorted].sort(compareTaskNames)).toEqual([
+    'CMC_2218_2218_M247_S0_EN_usr_ELI_PRI_Stat_NEW_9x16',
+    'CMC_2219_2218_A816_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2220_2218_A786_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2221_2218_A739_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+    'CMC_2222_2218_A621_S0_EN_usr_ELI_PRI_Stat_VAR_9x16',
+  ]);
+});

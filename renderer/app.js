@@ -2252,9 +2252,16 @@ async function openAutofillModal() {
   // Runs over the selection, which a plain click now populates with the one
   // clicked task. The selectedTask fallback remains for any path that opens the
   // rename panel without going through a row click.
-  const records = state.selectedIds.size
+  // Sorted by name up front so EVERYTHING downstream shares one order: the
+  // approval list, the link pairing, and the writes. The list arrives in
+  // selection order (newest first), and showing it in a different order from the
+  // pairing makes the pairing impossible to check by eye. Numeric-aware, so
+  // CMC_999 precedes CMC_1000. filter() already returned a fresh array, so this
+  // does not reorder state.records.
+  const records = (state.selectedIds.size
     ? state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
-    : [state.selectedTask].filter(r => r && r.fields['Name']);
+    : [state.selectedTask].filter(r => r && r.fields['Name'])
+  ).sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']));
   if (!records.length) return;
 
   const timingChoices = (state.tables[state.activeTable]?.fields || [])
@@ -2368,12 +2375,18 @@ function renderLinkPairs() {
   warning.textContent = note || `${paired.pairs.length} link(s) paired — counts match.`;
   warning.className = note ? 'links-warn' : 'links-ok';
 
-  paired.pairs.forEach(pair => {
+  paired.pairs.forEach((pair, i) => {
     const state_ = { ...pair, include: !pair.hasExisting };
     pendingLinkPairs.push(state_);
 
     const row = document.createElement('label');
     row.className = 'link-pair-row' + (pair.hasExisting ? ' has-existing' : '');
+
+    // The position is the whole point of the pairing, so show it.
+    const idx = document.createElement('span');
+    idx.className = 'link-pair-index';
+    idx.textContent = `${i + 1}.`;
+    row.appendChild(idx);
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
