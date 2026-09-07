@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
-const driveBrowser = require('./drive-browser');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -43,8 +42,6 @@ let lagReported = 0;
   }, TICK).unref?.();
 })();
 
-// Let the Drive automation write step-by-step progress to the same log.
-driveBrowser.setLogger(msg => log(`[drive] ${msg}`));
 
 // ── Settings ───────────────────────────────────────────────────────────
 
@@ -346,98 +343,14 @@ ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
 
 ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
 ipcMain.handle('get-log-path', () => logFilePath);
-ipcMain.handle('drive-diagnose', async (_e, folderId, opts) => {
-  try {
-    log(`drive-diagnose: starting${folderId ? ` for folder ${folderId}` : ' (no folder)'}`);
-    const result = await driveBrowser.diagnose(folderId, opts || {});
-    log(`drive-diagnose: loggedIn=${result.loggedIn}`);
-    return result;
-  } catch (err) {
-    log(`drive-diagnose FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-upload', async (_e, payload) => {
-  try {
-    log(`drive-upload: ${payload && payload.taskName} -> ${(payload && payload.filePaths || []).length} file(s)`);
-    const result = await driveBrowser.deliver(payload);
-    log(`drive-upload: done, missing=${JSON.stringify(result.missing)}`);
-    return result;
-  } catch (err) {
-    log(`drive-upload FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-probe-multi-upload', async (_e, folderId, folderPaths, mode) => {
-  try {
-    log(`drive-probe-multi-upload: ${mode} x${(folderPaths || []).length} -> ${folderId}`);
-    return await driveBrowser.probeMultiFolderUpload(folderId, folderPaths, mode);
-  } catch (err) {
-    log(`drive-probe-multi-upload FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-probe-rows', async (_e, folderId) => {
-  try {
-    log(`drive-probe-rows: ${folderId}`);
-    return await driveBrowser.probeItemRows(folderId);
-  } catch (err) {
-    log(`drive-probe-rows FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-sign-out', async () => {
-  try {
-    log('drive-sign-out: clearing the Drive session');
-    return await driveBrowser.signOut();
-  } catch (err) {
-    log(`drive-sign-out FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-sign-in', async () => {
-  try {
-    log('drive-sign-in: opening the Drive window for the user');
-    const r = await driveBrowser.signIn();
-    log(`drive-sign-in: loggedIn=${r.loggedIn}`);
-    return r;
-  } catch (err) {
-    log(`drive-sign-in FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-find-folders', async (_e, payload) => {
-  try {
-    log(`drive-find-folders: ${((payload && payload.taskNames) || []).length} task(s) under ${payload && payload.appFolderId}`);
-    return await driveBrowser.findFoldersByNames(payload);
-  } catch (err) {
-    log(`drive-find-folders FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('drive-upload-folder', async (_e, payload) => {
-  try {
-    log(`drive-upload-folder: ${payload && payload.taskName}`);
-    return await driveBrowser.uploadFolderToDrive(payload);
-  } catch (err) {
-    log(`drive-upload-folder FAILED: ${err.message}`);
-    return { error: err.message };
-  }
-});
 
-ipcMain.handle('find-asset-files-in-folder', (_e, dir) => {
-  return fs.readdirSync(dir)
-    .filter(n => !n.startsWith('.'))
-    .map(n => path.join(dir, n))
-    .filter(p => fs.statSync(p).isFile());
-});
 
 ipcMain.handle('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -510,37 +423,7 @@ function findDirByExactName(dir, name) {
   return null;
 }
 
-ipcMain.handle('find-task-folder', (_e, dir, name) => {
-  if (!dir || !name) return null;
-  return findDirByExactName(dir, name);
-});
 
-// Deletes ONLY files named exactly ".DS_Store", ONLY inside `folderPath`, and
-// ONLY when that folder sits inside `workingDir`. Drive's Folder upload cannot
-// filter, so this is the one place the feature writes to disk — it is
-// deliberately narrow, and every deletion is logged.
-ipcMain.handle('strip-ds-store', (_e, folderPath, workingDir) => {
-  const target = path.resolve(folderPath || '');
-  const root = path.resolve(workingDir || '');
-  if (!target || !root || !(target === root || target.startsWith(root + path.sep))) {
-    return { error: `refusing to touch ${target}: outside the working directory` };
-  }
-  const deleted = [];
-  const walk = (d) => {
-    let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const full = path.join(d, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name === '.DS_Store') {
-        try { fs.unlinkSync(full); deleted.push(full); log(`strip-ds-store: deleted ${full}`); }
-        catch (err) { log(`strip-ds-store: could not delete ${full} — ${err.message}`); }
-      }
-    }
-  };
-  walk(target);
-  return { deleted };
-});
 
 // For the Autofill approval modal — lets it show a thumbnail before upload.
 ipcMain.handle('read-image-data-url', (_e, filePath) => {

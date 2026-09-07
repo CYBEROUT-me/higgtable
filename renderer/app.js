@@ -62,22 +62,6 @@ const state = {
   selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
   workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
   driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
-  driveAppFolders: {}, // { appCode: driveFolderId } for delivery destinations; missing/blank = uploads abort
-  driveAppMirrors: {}, // { baseCode: [mirrorCode] } — mirror apps deliver into their base app's folder
-  driveTestMode: false, // redirect uploads to a test folder and skip the Airtable write
-  driveTestFolderId: '',
-  driveIncludeProjectFiles: false, // ship .aep/.psd sources too; off while testing the automation
-};
-
-// App-code -> display name for the Drive delivery folder. Codes are the first
-// token of a task Name; folder names end in "_creatives". Mirror apps use
-// different leading codes and can be added here.
-const DRIVE_APP_LABELS = {
-  CMC: 'Call Me Chat_creatives',
-  LO: 'Lowins_creatives',
-  OL: 'Olive_creatives',
-  PL: 'Plamfy_creatives',
-  TL: 'TopLive_creatives',
 };
 
 let currentDetailRecord = null;
@@ -226,11 +210,6 @@ async function boot() {
   const settings = await window.app.getSettings();
   state.workingDirectory = settings.workingDirectory || '';
   state.driveAccountIndex = settings.driveAccountIndex || '';
-  state.driveAppFolders = settings.driveAppFolders || {};
-  state.driveAppMirrors = settings.driveAppMirrors || {};
-  state.driveTestMode = settings.driveTestMode === true;
-  state.driveTestFolderId = settings.driveTestFolderId || '';
-  state.driveIncludeProjectFiles = settings.driveIncludeProjectFiles === true;
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
     log('boot: no API key, showing settings modal');
@@ -1826,339 +1805,6 @@ function renderFileList() {
 
 const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 
-// Uploads the task's local folder to Drive, then writes the Drive folder link
-// into Creative Link — but only if every file was verified present. A wrong
-// link is worse than none: it would look like a delivery that never happened.
-
-// Bulk delivery: each selected task's local folder is uploaded whole via Drive's
-// Folder upload. Tasks run sequentially (the chooser is selectSingle) and each
-// commits independently — one failure never discards the others' work.
-// Links tasks to folders the user has ALREADY uploaded to Drive by hand. Reads
-// Drive, never writes to it. A link reaches Airtable only for an exact,
-// unambiguous folder-name match.
-async function linkSelectedFromDrive() {
-  if (!state.selectedIds.size) return;
-
-  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
-  if (!records.length) return;
-
-  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
-  // Real delivery folders are <app>/<year>/<month>/<task>, so the year is needed
-  // as well as the month to know where to look first.
-  const now = new Date();
-  const monthName = monthFolderName(toISO(now));
-  const monthYear = now.getFullYear();
-
-  const candidates = records.map(rec => {
-    const taskName = rec.fields['Name'];
-    const code = appCodeFromTaskName(taskName);
-    return {
-      recordId: rec.id,
-      taskName,
-      code,
-      appFolderId: resolveAppFolderId(code, folderMap),
-      existingLink: rec.fields['Creative Link'],
-    };
-  });
-
-  if (state.driveTestMode && !state.driveTestFolderId) {
-    alert('Test mode is on but no test folder is set (Settings \u2192 Drive Delivery Folders).');
-    return;
-  }
-
-  const { plans, skipped } = planLinkRun({
-    candidates,
-    testFolderId: state.driveTestFolderId,
-    testMode: state.driveTestMode,
-  });
-
-  if (!plans.length) {
-    alert(`Nothing to link.\n\n${skipped.map(s => `  ${s.taskName} \u2014 ${s.reason}`).join('\n')}`);
-    return;
-  }
-
-  // Name the DESTINATION, not just the month. Without it a task silently aimed
-  // at the wrong app folder — via a mirror, or a mis-pasted URL — looks exactly
-  // like a correctly aimed one, and only shows up as a puzzling "not found".
-  const destLabel = (p) => {
-    if (state.driveTestMode) return 'test folder';
-    const c = candidates.find(x => x.recordId === p.recordId);
-    const code = c ? c.code : '';
-    return `${DRIVE_APP_LABELS[code] || code || '?'} (${code || '?'})`;
-  };
-  const lines = [
-    ...plans.map(p => `  ${p.taskName}  ->  ${destLabel(p)} / ${monthName}`),
-    ...skipped.map(s => `  ${s.taskName}  ->  SKIP (${s.reason})`),
-  ];
-  const banner = state.driveTestMode
-    ? 'TEST MODE \u2014 reading the test folder and NOT writing Creative Link.\n\n'
-    : '';
-  if (!confirm(`${banner}Look up ${plans.length} task folder(s) in Drive and fill Creative Link?\n\n${lines.join('\n')}`)) return;
-
-  // One lookup per destination, so a folder is read once no matter how many
-  // tasks point at it.
-  const byDest = {};
-  for (const p of plans) (byDest[p.destFolderId] = byDest[p.destFolderId] || []).push(p);
-
-  const btn = document.getElementById('bulk-drive-link-btn');
-  if (btn) btn.disabled = true;
-  const results = [...skipped.map(s => ({ task: s.taskName, skipped: s.reason }))];
-  const writes = [];
-
-  try {
-    const dests = Object.keys(byDest);
-    for (let i = 0; i < dests.length; i++) {
-      const dest = dests[i];
-      const group = byDest[dest];
-      if (btn) btn.textContent = `Looking up ${i + 1}/${dests.length}...`;
-
-      const res = await window.app.driveFindFolders({
-        appFolderId: dest,
-        monthName,
-        monthYear,
-        taskNames: group.map(p => p.taskName),
-      });
-
-      // A failed destination must not sink the others.
-      if (!res || res.error) {
-        const msg = (res && res.error) || 'unknown error';
-        // A signed-out session is the one failure a user can fix immediately, so
-        // name the button instead of leaving them to find it.
-        const hint = /not signed in/i.test(msg)
-          ? `${msg} (Settings \u2192 Google Drive Sign-in)`
-          : msg;
-        for (const p of group) results.push({ task: p.taskName, error: hint });
-        continue;
-      }
-
-      const where = res.searched && res.searched.length ? res.searched.join(', ') : 'nothing searchable found';
-      // Naming what IS in the destination turns "not found" into something the
-      // user can act on — usually a wrong folder configured in Settings.
-      const sample = (res.sampleNames && res.sampleNames.length)
-        ? `; that folder contains: ${res.sampleNames.join(', ')}`
-        : '';
-      for (const p of group) {
-        const folderId = res.matched[p.taskName];
-        if (folderId) {
-          writes.push({ recordId: p.recordId, taskName: p.taskName, folderUrl: `https://drive.google.com/drive/folders/${folderId}` });
-        } else if ((res.duplicates || []).includes(p.taskName)) {
-          results.push({ task: p.taskName, error: `more than one folder named "${p.taskName}" \u2014 resolve it in Drive` });
-        } else {
-          results.push({ task: p.taskName, error: `no folder named "${p.taskName}" (searched: ${where}${sample})` });
-        }
-      }
-    }
-
-    if (writes.length && !state.driveTestMode) {
-      const tableId = state.tables[state.activeTable].id;
-      try {
-        await window.airtable.updateRecords(state.baseId, tableId,
-          writes.map(w => ({ id: w.recordId, fields: { 'Creative Link': w.folderUrl } })));
-        for (const w of writes) {
-          const rec = state.records.find(r => r.id === w.recordId);
-          if (rec) rec.fields['Creative Link'] = w.folderUrl;
-          results.push({ task: w.taskName, folderUrl: w.folderUrl });
-        }
-      } catch (err) {
-        for (const w of writes) results.push({ task: w.taskName, error: `found the folder, but Creative Link not written: ${err.message}` });
-      }
-    } else {
-      for (const w of writes) results.push({ task: w.taskName, folderUrl: w.folderUrl });
-    }
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Link from Drive'; }
-  }
-
-  const s = summarizeBulkRun(results);
-  log(`linkSelectedFromDrive: ${s.delivered} linked, ${s.skipped} skipped, ${s.failed} failed`);
-  alert(`${state.driveTestMode ? 'TEST MODE \u2014 Creative Link not written.\n\n' : ''}Linked ${s.delivered}, skipped ${s.skipped}, failed ${s.failed}.\n\n${s.lines.join('\n')}`);
-  render();
-}
-
-async function uploadSelectedToDrive() {
-  if (!state.selectedIds.size) return;
-  if (!state.workingDirectory) { alert('Set a working directory first (settings).'); return; }
-
-  const records = state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name']);
-  if (!records.length) return;
-
-  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
-  const monthName = monthFolderName(toISO(new Date()));
-
-  // Resolve everything first so the confirm dialog shows the real plan.
-  const planned = records.map(rec => {
-    const taskName = rec.fields['Name'];
-    const code = appCodeFromTaskName(taskName);
-    return { rec, taskName, code, appFolderId: resolveAppFolderId(code, folderMap) };
-  });
-
-  const lines = planned.map(p => p.appFolderId
-    ? `  ${p.taskName}  ->  ${DRIVE_APP_LABELS[p.code] || p.code} / ${monthName}`
-    : `  ${p.taskName}  ->  SKIP (no folder configured for "${p.code || '?'}")`);
-  const banner = state.driveTestMode
-    ? 'TEST MODE — everything goes to the test folder and Creative Link is NOT written.\n\n'
-    : '';
-  if (!confirm(`${banner}Upload ${planned.length} task folder(s) to Drive?\n\n${lines.join('\n')}\n\nRuns one task at a time and can take a long time.`)) return;
-
-  // Guarded: the button is hidden by default (see renderer/index.html), so this
-  // lookup returns null unless someone has uncommented it.
-  const btn = document.getElementById('bulk-drive-upload-btn');
-  if (btn) btn.disabled = true;
-  const results = [];
-  // Month folder id per destination, resolved once and reused for the rest of
-  // the run. Scoped to this run so deleting folders in Drive between runs can
-  // never leave a stale id behind.
-  const monthIdByDest = {};
-  try {
-    for (let i = 0; i < planned.length; i++) {
-      const { rec, taskName, code, appFolderId } = planned[i];
-      if (btn) btn.textContent = `Uploading ${i + 1}/${planned.length}...`;
-
-      if (!appFolderId) { results.push({ task: taskName, skipped: `no Drive folder configured for "${code || '?'}"` }); continue; }
-
-      const localFolderPath = await window.app.findTaskFolder(state.workingDirectory, taskName);
-      if (!localFolderPath) { results.push({ task: taskName, skipped: 'no local folder with that exact name' }); continue; }
-
-      const stripped = await window.app.stripDsStore(localFolderPath, state.workingDirectory);
-      if (stripped && stripped.error) { results.push({ task: taskName, error: stripped.error }); continue; }
-      if (stripped && stripped.deleted.length) log(`uploadSelectedToDrive: removed ${stripped.deleted.length} .DS_Store from ${taskName}`);
-
-      const destFolderId = state.driveTestMode ? state.driveTestFolderId : appFolderId;
-      if (state.driveTestMode && !destFolderId) { results.push({ task: taskName, error: 'test mode on but no test folder set' }); continue; }
-
-      const res = await window.app.driveUploadFolder({
-        appFolderId: destFolderId, monthName, taskName, localFolderPath,
-        monthFolderId: monthIdByDest[destFolderId],
-      });
-      if (!res || res.error) { results.push({ task: taskName, error: (res && res.error) || 'unknown error' }); continue; }
-      if (res.monthFolderId) monthIdByDest[destFolderId] = res.monthFolderId;
-
-      if (state.driveTestMode) { results.push({ task: taskName, folderUrl: res.folderUrl }); continue; }
-
-      try {
-        await window.airtable.updateRecord(state.baseId, state.tables[state.activeTable].id, rec.id, {
-          'Creative Link': res.folderUrl,
-        });
-        rec.fields['Creative Link'] = res.folderUrl;
-        results.push({ task: taskName, folderUrl: res.folderUrl });
-      } catch (err) {
-        results.push({ task: taskName, error: `uploaded, but Creative Link not written: ${err.message}` });
-      }
-    }
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Upload to Drive'; }
-  }
-
-  const s = summarizeBulkRun(results);
-  log(`uploadSelectedToDrive: ${s.delivered} delivered, ${s.skipped} skipped, ${s.failed} failed`);
-  alert(`${state.driveTestMode ? 'TEST MODE — Creative Link not written.\n\n' : ''}Delivered ${s.delivered}, skipped ${s.skipped}, failed ${s.failed}.\n\n${s.lines.join('\n')}`);
-  render();
-}
-
-async function uploadTaskToDrive() {
-  const rec = state.selectedTask;
-  if (!rec) { alert('Select a task first.'); return; }
-  const taskName = rec.fields['Name'] || '';
-
-  const code = appCodeFromTaskName(taskName);
-  // Mirror codes resolve to their base app's folder.
-  const folderMap = buildFolderMap(state.driveAppFolders, state.driveAppMirrors);
-  const appFolderId = resolveAppFolderId(code, folderMap);
-  if (!appFolderId) {
-    alert(`No Drive folder is configured for app code "${code || '(none)'}".\n\nAdd it in Settings → Drive Delivery Folders. Nothing was uploaded.`);
-    return;
-  }
-
-  const dirs = [...new Set(state.pendingFiles.map(f => f.path.substring(0, f.path.lastIndexOf('/'))))];
-  if (dirs.length !== 1) {
-    alert('Rename the files first — the task folder was not found.');
-    return;
-  }
-  const sourceDir = dirs[0];
-
-  // SAFETY: only ever upload from the per-task folder performRename() created.
-  // Before renaming, these paths point at the raw working directory (e.g. the
-  // After Effects folder) — uploading that would dump hundreds of unrelated
-  // files into a client's Drive. The folder name must equal the task Name.
-  if (sourceDir.split('/').pop() !== taskName) {
-    alert(`Not uploading: "${sourceDir}" is not this task's folder.\n\nClick "Rename Files" first — that gathers the files into a folder named after the task. Nothing was uploaded.`);
-    return;
-  }
-
-  // Selection-based: upload exactly the files listed in the rename panel, not
-  // everything sitting in the task folder. Folder-wide upload surprised users
-  // by including files left over from earlier runs.
-  const allFiles = state.pendingFiles.filter(f => !f.error).map(f => f.path);
-  if (!allFiles.length) { alert('No files selected — add files to the panel first.'); return; }
-
-  // Project/source files ship only when the setting is on. Excluded files are
-  // always listed below so it is never ambiguous what did and didn't go.
-  const { include: filePaths, excluded } = partitionUploadFiles(allFiles, state.driveIncludeProjectFiles);
-  if (!filePaths.length) {
-    alert(`Nothing to upload — all ${allFiles.length} file(s) are project files, and "Also upload project/source files" is off in Settings.`);
-    return;
-  }
-
-  // Test mode: the app code is still resolved above (so the unknown-code guard
-  // stays meaningful and mirror resolution is exercised), but the destination is
-  // redirected and the Airtable write is skipped.
-  let destFolderId = appFolderId;
-  if (state.driveTestMode) {
-    if (!state.driveTestFolderId) {
-      alert('Test mode is on but no test folder is set.\n\nAdd one in Settings → Drive Delivery Folders. Nothing was uploaded.');
-      return;
-    }
-    destFolderId = state.driveTestFolderId;
-  }
-
-  const monthName = monthFolderName(toISO(new Date()));
-  // A mirror code has no label of its own; show the base app it delivers into.
-  const baseEntry = Object.entries(DRIVE_APP_LABELS).find(([b]) => state.driveAppFolders[b] === appFolderId);
-  const appLabel = DRIVE_APP_LABELS[code] || (baseEntry ? `${baseEntry[1]} (via ${code})` : code);
-  const destination = state.driveTestMode
-    ? `TEST MODE — uploading to the test folder, NOT ${appLabel}\nTest folder / ${monthName} / ${taskName}\nCreative Link will NOT be written.`
-    : `${appLabel} / ${monthName} / ${taskName}`;
-  const skipNote = excluded.length
-    ? `\n\nNOT uploading ${excluded.length} project file(s):\n${excluded.map(p => p.split('/').pop()).join('\n')}`
-    : '';
-  if (!confirm(`Upload ${filePaths.length} selected file(s) to Drive?\n\n${destination}\n\n${filePaths.map(p => p.split('/').pop()).join('\n')}${skipNote}`)) {
-    return;
-  }
-
-  // Guarded: the button is hidden by default (see renderer/index.html), so this
-  // lookup returns null unless someone has uncommented it.
-  const btn = document.getElementById('drive-upload-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Uploading...'; }
-  try {
-    const result = await window.app.driveUpload({ appFolderId: destFolderId, monthName, taskName, filePaths });
-    if (result.error) {
-      alert(`Upload failed — nothing written to Airtable.\n\n${result.error}`);
-      return;
-    }
-    if (result.missing && result.missing.length) {
-      alert(`Upload could not be verified — nothing written to Airtable.\n\nMissing in Drive:\n${result.missing.join('\n')}`);
-      return;
-    }
-    if (state.driveTestMode) {
-      log(`uploadTaskToDrive: TEST MODE — delivered to ${result.folderUrl}, Creative Link left untouched`);
-      alert(`TEST MODE: uploaded ${filePaths.length} file(s) to the test folder.\n\nCreative Link was NOT written.\n\n${result.folderUrl}`);
-      return;
-    }
-    // Verified: safe to record the link. updateRecordField() needs a DOM input
-    // to flash status against, so write through the Airtable bridge directly.
-    await window.airtable.updateRecord(state.baseId, state.tables[state.activeTable].id, rec.id, {
-      'Creative Link': result.folderUrl,
-    });
-    rec.fields['Creative Link'] = result.folderUrl;
-    log(`uploadTaskToDrive: ${filePaths.length} file(s) delivered, Creative Link -> ${result.folderUrl}`);
-    const warn = result.warnings && result.warnings.length ? `\n\nWarnings:\n${result.warnings.join('\n')}` : '';
-    alert(`Delivered ${filePaths.length} file(s) and set Creative Link.${warn}`);
-  } catch (err) {
-    alert(`Upload failed — nothing written to Airtable.\n\n${err.message}`);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Upload to Drive'; }
-  }
-}
 
 async function performRename() {
   const fullTaskName = state.selectedTask ? (state.selectedTask.fields['Name'] || '') : '';
@@ -2653,71 +2299,7 @@ function showSettingsModal(forced = false) {
   document.getElementById('api-key-input').value = '';
   document.getElementById('working-dir-input').value = state.workingDirectory || '';
   document.getElementById('drive-account-index-input').value = state.driveAccountIndex || '';
-  renderDriveAppFolderRows();
-  document.getElementById('drive-test-mode-input').checked = state.driveTestMode;
-  document.getElementById('drive-test-folder-input').value = state.driveTestFolderId || '';
-  document.getElementById('drive-include-project-input').checked = state.driveIncludeProjectFiles;
   document.getElementById('api-key-input').focus();
-}
-
-// One row per app code: a code label plus an input that accepts a pasted Drive
-// folder URL. The input displays the parsed folder ID rather than the URL, so
-// what is stored is visibly what will be used.
-function renderDriveAppFolderRows() {
-  const wrap = document.getElementById('drive-app-folders');
-  wrap.innerHTML = '';
-  Object.entries(DRIVE_APP_LABELS).forEach(([code, label]) => {
-    const row = document.createElement('div');
-    row.className = 'drive-folder-row';
-
-    const codeEl = document.createElement('span');
-    codeEl.className = 'drive-folder-code';
-    codeEl.textContent = code;
-    codeEl.title = label;
-    row.appendChild(codeEl);
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = `${label} — paste folder URL`;
-    input.value = state.driveAppFolders[code] || '';
-    input.addEventListener('change', async () => {
-      const raw = input.value.trim();
-      if (!raw) {
-        delete state.driveAppFolders[code];
-      } else {
-        const id = parseFolderIdFromUrl(raw);
-        if (!id) {
-          input.value = '';
-          alert(`That doesn't look like a Drive folder URL.\n\nOpen the ${label} folder in Drive and copy the address bar — it should contain "/folders/".`);
-          return;
-        }
-        state.driveAppFolders[code] = id;
-      }
-      input.value = state.driveAppFolders[code] || '';
-      await window.app.saveSettings({ driveAppFolders: state.driveAppFolders });
-      log(`drive-app-folders: ${code} -> ${state.driveAppFolders[code] || '(cleared)'}`);
-    });
-    row.appendChild(input);
-
-    // Mirror apps: different leading code, same destination folder.
-    const mirrors = document.createElement('input');
-    mirrors.type = 'text';
-    mirrors.className = 'drive-folder-mirrors';
-    mirrors.placeholder = 'mirrors: BL, HC';
-    mirrors.title = `Other task-name prefixes that should also deliver into ${label} — e.g. BL`;
-    mirrors.value = (state.driveAppMirrors[code] || []).join(', ');
-    mirrors.addEventListener('change', async () => {
-      const codes = parseMirrorCodes(mirrors.value);
-      if (codes.length) state.driveAppMirrors[code] = codes;
-      else delete state.driveAppMirrors[code];
-      mirrors.value = codes.join(', ');
-      await window.app.saveSettings({ driveAppMirrors: state.driveAppMirrors });
-      log(`drive-app-mirrors: ${code} -> ${JSON.stringify(codes)}`);
-    });
-    row.appendChild(mirrors);
-
-    wrap.appendChild(row);
-  });
 }
 
 function hideSettingsModal() {
@@ -2727,65 +2309,7 @@ function hideSettingsModal() {
 async function saveSettings() {
   const key = document.getElementById('api-key-input').value.trim();
   if (!key) { hideSettingsModal(); return; }
-  const btn = // Deliberate Google sign-in. Every other Drive path only reaches Google after
-// resolving folders and tasks, so a new user with nothing configured never got
-// a login window at all.
-document.getElementById('drive-signin-btn').addEventListener('click', async () => {
-  const btn = document.getElementById('drive-signin-btn');
-  const status = document.getElementById('drive-signin-status');
-  btn.disabled = true;
-  btn.textContent = 'Opening Google...';
-  status.textContent = 'A Drive window will open — sign in there, then come back.';
-  status.className = '';
-  try {
-    const r = await window.app.driveSignIn();
-    if (r && r.error) {
-      status.textContent = r.error;
-      status.className = 'signin-bad';
-    } else if (r && r.loggedIn) {
-      status.textContent = r.alreadySignedIn ? 'Already signed in.' : 'Signed in.';
-      status.className = 'signin-ok';
-    } else {
-      status.textContent = 'Not signed in yet. Click again once the Google window is done.';
-      status.className = 'signin-bad';
-    }
-  } catch (err) {
-    status.textContent = `Sign-in failed: ${err.message}`;
-    status.className = 'signin-bad';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Sign in to Google Drive';
-  }
-});
-
-// Signing out is the only way to switch Google accounts: with valid cookies the
-// sign-in button just reports "already signed in" and never shows Google's
-// account chooser. Confirmed first, because it means signing in again.
-document.getElementById('drive-signout-btn').addEventListener('click', async () => {
-  const btn = document.getElementById('drive-signout-btn');
-  const status = document.getElementById('drive-signin-status');
-  if (!confirm('Forget the Google Drive session for HiggTable?\n\nYou will need to sign in again before using "Link from Drive". Your browser sign-ins are not affected.')) return;
-  btn.disabled = true;
-  btn.textContent = 'Signing out...';
-  try {
-    const r = await window.app.driveSignOut();
-    if (r && r.error) {
-      status.textContent = r.error;
-      status.className = 'signin-bad';
-    } else {
-      status.textContent = 'Signed out. Click "Sign in to Google Drive" to connect an account.';
-      status.className = '';
-    }
-  } catch (err) {
-    status.textContent = `Sign-out failed: ${err.message}`;
-    status.className = 'signin-bad';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Sign out';
-  }
-});
-
-document.getElementById('settings-save-btn');
+  const btn = document.getElementById('settings-save-btn');
   btn.disabled = true;
   try {
     await window.app.saveSettings({ apiKey: key });
@@ -2849,22 +2373,6 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
 document.getElementById('bulk-mark-inwork-btn').addEventListener('click', markSelectedAsInWork);
-// Retained but hidden — see the note in renderer/index.html. Guarded so the
-// renderer still loads while the button is commented out.
-const bulkDriveLinkBtn = document.getElementById('bulk-drive-link-btn');
-if (bulkDriveLinkBtn) bulkDriveLinkBtn.addEventListener('click', () => {
-  if (bulkDriveLinkBtn.disabled) return;
-  linkSelectedFromDrive();
-});
-
-// Drive upload is retained but hidden — see the note in renderer/index.html.
-// Guarded so the renderer still loads while the button is commented out.
-const bulkUploadBtn = document.getElementById('bulk-drive-upload-btn');
-if (bulkUploadBtn) bulkUploadBtn.addEventListener('click', () => {
-  if (bulkUploadBtn.disabled) return;
-  uploadSelectedToDrive();
-});
-
 document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-autofill-btn').disabled) return;
   openAutofillModal();
@@ -2947,32 +2455,6 @@ document.getElementById('drive-account-index-input').addEventListener('change', 
   log(`drive-account-index-input: Drive account index set to "${value}"`);
 });
 
-document.getElementById('drive-test-mode-input').addEventListener('change', async (e) => {
-  state.driveTestMode = e.target.checked;
-  await window.app.saveSettings({ driveTestMode: state.driveTestMode });
-  log(`drive-test-mode: ${state.driveTestMode ? 'ON — uploads redirected, Creative Link not written' : 'off'}`);
-});
-
-document.getElementById('drive-test-folder-input').addEventListener('change', async (e) => {
-  const raw = e.target.value.trim();
-  const id = raw ? parseFolderIdFromUrl(raw) : '';
-  if (raw && !id) {
-    e.target.value = state.driveTestFolderId || '';
-    alert('That doesn\'t look like a Drive folder URL. Open the test folder in Drive and copy the address bar.');
-    return;
-  }
-  state.driveTestFolderId = id;
-  e.target.value = id;
-  await window.app.saveSettings({ driveTestFolderId: id });
-  log(`drive-test-folder: ${id || '(cleared)'}`);
-});
-
-document.getElementById('drive-include-project-input').addEventListener('change', async (e) => {
-  state.driveIncludeProjectFiles = e.target.checked;
-  await window.app.saveSettings({ driveIncludeProjectFiles: state.driveIncludeProjectFiles });
-  log(`drive-include-project-input: project files ${state.driveIncludeProjectFiles ? 'INCLUDED' : 'excluded'}`);
-});
-
 document.getElementById('record-modal-close').addEventListener('click', closeRecordModal);
 document.getElementById('record-modal').addEventListener('click', e => {
   if (e.target.id === 'record-modal') closeRecordModal();
@@ -3012,8 +2494,6 @@ document.getElementById('clear-files-btn').addEventListener('click', () => {
   renderFileList();
 });
 document.getElementById('rename-btn').addEventListener('click', performRename);
-const driveUploadBtn = document.getElementById('drive-upload-btn');
-if (driveUploadBtn) driveUploadBtn.addEventListener('click', uploadTaskToDrive);
 
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });

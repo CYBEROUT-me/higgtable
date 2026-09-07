@@ -262,16 +262,6 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .record-text-field-with-link input { flex: 1; }
 .field-open-link-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: none; border: none; border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; flex-shrink: 0; transition: background-color 0.15s, color 0.15s; }
 .field-open-link-btn:hover { background: var(--bg-surface-2); color: var(--text-primary); }
-#drive-app-folders { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
-.drive-folder-row { display: flex; align-items: center; gap: var(--space-3); }
-.drive-folder-code { flex-shrink: 0; width: 38px; font-size: 11px; font-weight: 600; color: var(--accent); font-family: monospace; }
-.drive-folder-row input.drive-folder-mirrors { flex: 0 0 170px; }
-.drive-folder-row input[type=text] { flex: 1; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 11px; font-family: monospace; }
-#drive-test-mode-label { display: flex; align-items: center; gap: var(--space-2); font-size: 11px; color: var(--text-secondary); cursor: pointer; margin-bottom: var(--space-2); }
-#drive-test-mode-label input[type=checkbox] { width: auto; }
-#drive-test-folder-input { width: 100%; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 11px; font-family: monospace; margin-bottom: var(--space-3); }
-#drive-include-project-label { display: flex; align-items: center; gap: var(--space-2); font-size: 11px; color: var(--text-secondary); margin-bottom: var(--space-5); cursor: pointer; }
-#drive-include-project-label input[type=checkbox] { width: auto; }
 .record-field-value input[type=checkbox] { width: auto; }
 .record-multiselect { display: flex; flex-direction: column; gap: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); padding: 2px; }
 .record-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
@@ -323,20 +313,6 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .canvas-card-name { font-size: 11px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .canvas-card-meta, .canvas-card-network { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Google Drive sign-in row in Settings */
-#drive-signin-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-2);
-}
-#drive-signin-status {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-#drive-signin-status.signin-ok { color: var(--accent); }
-#drive-signin-status.signin-bad { color: #d29922; }
 
 /* Autofill: shared Figma/Canvas link for a batch of Stat creatives */
 #autofill-figma-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
