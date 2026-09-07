@@ -2849,8 +2849,11 @@ document.getElementById('dashboard-refresh-btn').addEventListener('click', async
 
 document.getElementById('bulk-mark-accept-btn').addEventListener('click', markSelectedAsToAccept);
 document.getElementById('bulk-mark-inwork-btn').addEventListener('click', markSelectedAsInWork);
-document.getElementById('bulk-drive-link-btn').addEventListener('click', () => {
-  if (document.getElementById('bulk-drive-link-btn').disabled) return;
+// Retained but hidden — see the note in renderer/index.html. Guarded so the
+// renderer still loads while the button is commented out.
+const bulkDriveLinkBtn = document.getElementById('bulk-drive-link-btn');
+if (bulkDriveLinkBtn) bulkDriveLinkBtn.addEventListener('click', () => {
+  if (bulkDriveLinkBtn.disabled) return;
   linkSelectedFromDrive();
 });
 
