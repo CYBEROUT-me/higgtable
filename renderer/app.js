@@ -1977,6 +1977,10 @@ async function openAutofillModal() {
 // Pairing state for the pasted Creative Links, rebuilt on every keystroke in the
 // textarea and read back by confirmAutofill.
 let pendingLinkPairs = [];
+// Links in the order they will be applied. Rebuilt from the textarea on every
+// keystroke, then mutated by the ↑/↓ controls — Drive's copy order is not fully
+// predictable, so manual correction has to be possible.
+let pendingLinkOrder = null;
 
 function creativeLinkFieldName() {
   return resolveFieldName(
@@ -2009,13 +2013,21 @@ function renderLinkPairs() {
   }
 
   const parsed = parseLinkList(textarea.value);
+  // Rebuild the order from the paste unless the user has nudged rows for THIS
+  // exact set of links; then their arrangement wins.
+  const driveOrder = document.getElementById('autofill-drive-order-input').checked;
+  const fromPaste = driveOrder ? reorderFromDriveSelection(parsed.links) : parsed.links;
+  if (!pendingLinkOrder || pendingLinkOrder.length !== fromPaste.length
+      || !fromPaste.every(l => pendingLinkOrder.includes(l))) {
+    pendingLinkOrder = fromPaste;
+  }
   const tasks = pendingAutofillCandidates.map(c => ({
     id: c.rec.id,
     name: c.rec.fields['Name'] || '',
     existingLink: c.rec.fields[field] || '',
     candidate: c,
   }));
-  const paired = pairLinksToTasks(tasks, parsed.links);
+  const paired = pairLinksToTasks(tasks, pendingLinkOrder);
 
   const note = describeMismatch(paired, parsed);
   warning.textContent = note || `${paired.pairs.length} link(s) paired — counts match.`;
@@ -2045,11 +2057,45 @@ function renderLinkPairs() {
     name.textContent = pair.task.name;
     row.appendChild(name);
 
-    const link = document.createElement('span');
-    link.className = 'link-pair-url';
+    // A Drive URL is an opaque id, so the only way to check a pairing is to open
+    // the folder. Without this the review list cannot actually be reviewed.
+    const link = document.createElement('button');
+    link.className = 'link-pair-url-btn';
+    link.type = 'button';
     link.textContent = pair.link;
-    link.title = pair.link;
+    link.title = `Open this folder to check it is ${pair.task.name}`;
+    link.onclick = (e) => {
+      e.preventDefault();
+      window.app.openExternal(rewriteDriveLink(pair.link, state.driveAccountIndex));
+    };
     row.appendChild(link);
+
+    // Drive's copy order is an observation, not a guarantee — these let a wrong
+    // pairing be corrected without re-pasting the whole list.
+    const move = (from, to) => {
+      const arr = [...pendingLinkOrder];
+      const [item] = arr.splice(from, 1);
+      arr.splice(to, 0, item);
+      pendingLinkOrder = arr;
+      renderLinkPairs();
+    };
+    const up = document.createElement('button');
+    up.className = 'link-pair-move';
+    up.type = 'button';
+    up.textContent = '↑';
+    up.title = 'Move this link one task earlier';
+    up.disabled = i === 0;
+    up.onclick = (e) => { e.preventDefault(); move(i, i - 1); };
+    row.appendChild(up);
+
+    const down = document.createElement('button');
+    down.className = 'link-pair-move';
+    down.type = 'button';
+    down.textContent = '↓';
+    down.title = 'Move this link one task later';
+    down.disabled = i === paired.pairs.length - 1;
+    down.onclick = (e) => { e.preventDefault(); move(i, i + 1); };
+    row.appendChild(down);
 
     if (pair.hasExisting) {
       const flag = document.createElement('span');
@@ -2096,6 +2142,7 @@ async function renderAutofillApprovalList() {
   // A fresh batch starts with an empty paste box: carrying links over from a
   // previous run would pair them against different tasks.
   document.getElementById('autofill-links').value = '';
+  pendingLinkOrder = null;
   renderLinkPairs();
 
   const statCount = pendingAutofillCandidates.filter(isStatCandidate).length;
@@ -2412,7 +2459,14 @@ document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   render();
 });
 
-document.getElementById('autofill-links').addEventListener('input', renderLinkPairs);
+document.getElementById('autofill-links').addEventListener('input', () => {
+  pendingLinkOrder = null;   // a new paste replaces any manual arrangement
+  renderLinkPairs();
+});
+document.getElementById('autofill-drive-order-input').addEventListener('change', () => {
+  pendingLinkOrder = null;
+  renderLinkPairs();
+});
 document.getElementById('autofill-approval-confirm-btn').addEventListener('click', confirmAutofill);
 document.getElementById('autofill-approval-cancel-btn').addEventListener('click', closeAutofillModal);
 document.getElementById('autofill-approval-modal').addEventListener('click', e => {

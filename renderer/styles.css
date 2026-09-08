@@ -368,3 +368,11 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .link-pair-row.has-existing .link-pair-task { color: var(--text-secondary); }
 .link-pair-missing { color: var(--text-muted); font-style: italic; }
 .link-pair-index { flex-shrink: 0; color: var(--text-muted); font-size: 10px; min-width: 18px; text-align: right; }
+
+#autofill-drive-order-label { display: flex; align-items: center; gap: var(--space-2); font-size: 11px; color: var(--text-secondary); cursor: pointer; margin-top: var(--space-2); }
+#autofill-drive-order-label input[type=checkbox] { width: auto; }
+.link-pair-url-btn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: none; border: none; padding: 0; color: var(--accent); font-family: monospace; font-size: 11px; text-decoration: underline; cursor: pointer; }
+.link-pair-url-btn:hover { background: none; color: var(--accent-strong); }
+.link-pair-move { flex-shrink: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 0 var(--space-1); line-height: 1; }
+.link-pair-move:hover:not(:disabled) { color: var(--accent); background: none; }
+.link-pair-move:disabled { opacity: 0.25; cursor: default; }

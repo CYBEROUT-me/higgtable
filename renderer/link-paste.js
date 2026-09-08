@@ -38,6 +38,29 @@ function compareByName(a, b) {
   );
 }
 
+// Google Drive does not hand back a shift-selection's links in display order.
+// Observed 2026-09-08: selecting five folders whose names sort
+//   13999, 14000, 14001, 14002, 14003
+// copied links in the order
+//   13999, 14003, 14000, 14001, 14002
+// i.e. the ANCHOR you clicked, then the TARGET you shift-clicked, then the
+// range fill in order. This undoes that so positional pairing lines up again:
+// output[0] takes the first link, output[last] the second, and everything
+// between shifts down by one.
+//
+// This is a single observation, not a documented guarantee, which is why the UI
+// exposes it as a switch whose effect is visible before anything is written
+// rather than applying it silently.
+function reorderFromDriveSelection(links) {
+  const l = [...(links || [])];
+  if (l.length < 3) return l;           // nothing to undo for one or two links
+  const out = new Array(l.length);
+  out[0] = l[0];                        // anchor
+  out[l.length - 1] = l[1];             // shift-clicked target
+  for (let i = 1; i < l.length - 1; i++) out[i] = l[i + 1];
+  return out;
+}
+
 // Pairs the Nth link with the Nth task, tasks ascending by name.
 //
 // Tasks that already hold a link STAY in the ordering and still consume their
@@ -79,5 +102,8 @@ function describeMismatch({ pairs, tasksWithoutLink, unusedLinks }, { invalid = 
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseLinkList, compareByName, pairLinksToTasks, describeMismatch };
+  module.exports = {
+    parseLinkList, compareByName, pairLinksToTasks, describeMismatch,
+    reorderFromDriveSelection,
+  };
 }

@@ -1,4 +1,4 @@
-const { parseLinkList, compareByName, pairLinksToTasks, describeMismatch } =
+const { parseLinkList, compareByName, pairLinksToTasks, describeMismatch, reorderFromDriveSelection } =
   require('../renderer/link-paste');
 
 // The exact shape a list arrives in when copied out of Drive.
@@ -140,5 +140,62 @@ describe('describeMismatch', () => {
     const msg = describeMismatch(r, { invalid: ['nope'], duplicates: ['a'] });
     expect(msg).toContain('not URLs');
     expect(msg).toContain('duplicate');
+  });
+});
+
+// Drive returns a shift-selection's links as: the folder clicked, the folder
+// shift-clicked, then the range fill. Observed 2026-09-08 with five OL_ folders.
+describe('reorderFromDriveSelection', () => {
+  test('undoes the observed five-folder order', () => {
+    // names sort 13999, 14000, 14001, 14002, 14003
+    // Drive copied  13999, 14003, 14000, 14001, 14002
+    const drive = ['L13999', 'L14003', 'L14000', 'L14001', 'L14002'];
+    expect(reorderFromDriveSelection(drive))
+      .toEqual(['L13999', 'L14000', 'L14001', 'L14002', 'L14003']);
+  });
+
+  test('pairs correctly end to end after reordering', () => {
+    const tasks = ['OL_13999', 'OL_14000', 'OL_14001', 'OL_14002', 'OL_14003']
+      .map(n => ({ id: n, name: n, existingLink: '' }));
+    const drive = ['L13999', 'L14003', 'L14000', 'L14001', 'L14002'];
+    const paired = pairLinksToTasks(tasks, reorderFromDriveSelection(drive));
+    expect(paired.pairs.map(p => [p.task.name, p.link])).toEqual([
+      ['OL_13999', 'L13999'],
+      ['OL_14000', 'L14000'],
+      ['OL_14001', 'L14001'],
+      ['OL_14002', 'L14002'],
+      ['OL_14003', 'L14003'],
+    ]);
+  });
+
+  test('handles three links', () => {
+    expect(reorderFromDriveSelection(['A', 'C', 'B'])).toEqual(['A', 'B', 'C']);
+  });
+
+  test('leaves one or two links untouched — there is nothing to undo', () => {
+    expect(reorderFromDriveSelection(['A'])).toEqual(['A']);
+    expect(reorderFromDriveSelection(['A', 'B'])).toEqual(['A', 'B']);
+    expect(reorderFromDriveSelection([])).toEqual([]);
+  });
+
+  test('does not mutate the input', () => {
+    const input = ['A', 'C', 'B'];
+    reorderFromDriveSelection(input);
+    expect(input).toEqual(['A', 'C', 'B']);
+  });
+
+  test('with three links it swaps the last two, so it is self-inverse there', () => {
+    // Worth pinning: at n=3 the correction only exchanges positions 1 and 2, so
+    // applying it twice returns the original. That is NOT true from n=4 up, so
+    // the switch must never be applied twice to the same list.
+    const once = reorderFromDriveSelection(['A', 'C', 'B']);
+    expect(once).toEqual(['A', 'B', 'C']);
+    expect(reorderFromDriveSelection(once)).toEqual(['A', 'C', 'B']);
+  });
+
+  test('from four links up it is a one-way correction', () => {
+    const once = reorderFromDriveSelection(['A', 'B', 'C', 'D', 'E']);
+    expect(once).toEqual(['A', 'C', 'D', 'E', 'B']);
+    expect(reorderFromDriveSelection(once)).not.toEqual(['A', 'B', 'C', 'D', 'E']);
   });
 });
