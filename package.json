@@ -1,6 +1,6 @@
 {
   "name": "higgtable",
-  "version": "1.6.0",
+  "version": "1.6.3",
   "description": "Airtable file renaming tool",
   "main": "main.js",
   "scripts": {
