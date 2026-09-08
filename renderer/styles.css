@@ -205,8 +205,20 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .field-settings-box { max-width: 420px; }
 .field-settings-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-2); margin: var(--space-4) 0 var(--space-5); }
 .field-settings-item { display: flex; align-items: center; gap: var(--space-3); font-size: 12px; color: var(--text-primary); cursor: pointer; }
-.autofill-approval-box { max-width: 620px; width: 90vw; }
-#autofill-approval-list { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-4) 0 var(--space-5); }
+/* Bounded to the viewport as a flex column, the same way .record-modal-box is.
+   Without a max-height the box grew past the window once the pasted-links block
+   was added on top of a 60vh approval list — and because .modal-overlay centres
+   it and never scrolls, the Apply/Cancel row ended up below the window edge,
+   unreachable and unclickable. */
+.autofill-approval-box { max-width: 620px; width: 90vw; max-height: 88vh; display: flex; flex-direction: column; }
+/* The heading, the two link inputs and the buttons keep their size; only the
+   approval list gives way, so Apply is always on screen. */
+.autofill-approval-box > h2,
+.autofill-approval-box > p,
+.autofill-approval-box > #autofill-figma-row,
+.autofill-approval-box > #autofill-links-row,
+.autofill-approval-box > .modal-actions { flex-shrink: 0; }
+#autofill-approval-list { flex: 1 1 auto; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-4) 0 var(--space-5); }
 .autofill-approval-row { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-2); border-radius: var(--radius-sm); }
 .autofill-approval-row.no-match { opacity: 0.5; }
 .autofill-approval-thumb { width: 96px; height: 96px; object-fit: cover; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border); flex-shrink: 0; }
@@ -348,7 +360,7 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 #autofill-links-warning.links-ok { color: var(--accent); }
 #autofill-links-warning.links-warn { color: #d29922; }
 #autofill-links-warning.links-bad { color: #f85149; }
-#autofill-links-pairs { max-height: 200px; overflow-y: auto; margin-top: var(--space-2); }
+#autofill-links-pairs { max-height: 22vh; overflow-y: auto; margin-top: var(--space-2); }
 .link-pair-row { display: flex; align-items: center; gap: var(--space-3); font-size: 11px; padding: var(--space-1) 0; border-bottom: 1px solid var(--border); }
 .link-pair-task { font-family: monospace; color: var(--text-primary); flex-shrink: 0; }
 .link-pair-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-family: monospace; }
