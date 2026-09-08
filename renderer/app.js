@@ -1,5 +1,5 @@
 const TARGET_BASE = 'UT Marketing Team';
-const TARGET_TABLES = ['VCP Creatives', 'PLM Creatives', 'CMC Creatives', 'LB Creatives'];
+const TARGET_TABLES = ['VCP Creatives', 'PLM Creatives', 'CMC Creatives', 'LB Creatives', 'OMGF Creatives'];
 const DEFAULT_STATUSES = ['In work', 'Ready for Design'];
 const COLUMNS = ['Name', 'Priority', 'Deadline', 'Branch', 'Model ID', 'Script ID', 'Size', 'CP', 'DES', 'Format', 'Network', 'Type', 'Language', 'Status'];
 const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
