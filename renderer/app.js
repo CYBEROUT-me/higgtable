@@ -2212,8 +2212,7 @@ async function confirmAutofill() {
     return;
   }
 
-  const btn = document.getElementById('autofill-links').addEventListener('input', renderLinkPairs);
-document.getElementById('autofill-approval-confirm-btn');
+  const btn = document.getElementById('autofill-approval-confirm-btn');
   btn.disabled = true;
   btn.textContent = 'Applying...';
   let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0, creativeLinked = 0;
@@ -2413,6 +2412,7 @@ document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   render();
 });
 
+document.getElementById('autofill-links').addEventListener('input', renderLinkPairs);
 document.getElementById('autofill-approval-confirm-btn').addEventListener('click', confirmAutofill);
 document.getElementById('autofill-approval-cancel-btn').addEventListener('click', closeAutofillModal);
 document.getElementById('autofill-approval-modal').addEventListener('click', e => {
