@@ -31,4 +31,5 @@ contextBridge.exposeInMainWorld('app', {
   log:               (msg)         => ipcRenderer.invoke('log', msg),
   getLogPath:        ()            => ipcRenderer.invoke('get-log-path'),
   openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
+  copyToClipboard:   (text)        => ipcRenderer.invoke('copy-to-clipboard', text),
 });

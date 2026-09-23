@@ -1663,6 +1663,31 @@ function closeTaskSearch({ clear = false } = {}) {
   if (clear) document.getElementById('task-search').value = '';
 }
 
+// Copies the selected task name(s). Sorted by name so a multi-row copy lands in
+// the same order everything else in this app uses, and joined by newlines so it
+// pastes straight into a list.
+async function copySelectedTaskNames() {
+  const names = state.records
+    .filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
+    .map(r => r.fields['Name'])
+    .sort(compareTaskNames);
+  if (!names.length) return;
+
+  const btn = document.getElementById('bulk-copy-name-btn');
+  try {
+    await window.app.copyToClipboard(names.join('\n'));
+    // Confirm in place: a clipboard write is otherwise completely invisible.
+    if (btn) {
+      btn.textContent = names.length === 1 ? '✓ Copied' : `✓ Copied ${names.length}`;
+      setTimeout(() => { btn.textContent = '⧉ Copy name'; }, 1200);
+    }
+    log(`copySelectedTaskNames: copied ${names.length} name(s)`);
+  } catch (err) {
+    alert(`Could not copy: ${err.message}`);
+    log(`copySelectedTaskNames: FAILED — ${err.message}`);
+  }
+}
+
 // ── Task selection & rename panel ────────────────────────────────────────
 
 // Finder-style multi-select: plain click still picks a single task for
@@ -2449,6 +2474,8 @@ document.addEventListener('keydown', (e) => {
   taskSearchInput.focus();
   taskSearchInput.select();
 });
+
+document.getElementById('bulk-copy-name-btn').addEventListener('click', copySelectedTaskNames);
 
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   // Also close the rename panel: a single click selects the task AND opens the

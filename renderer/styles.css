@@ -376,3 +376,7 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .link-pair-move { flex-shrink: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 0 var(--space-1); line-height: 1; }
 .link-pair-move:hover:not(:disabled) { color: var(--accent); background: none; }
 .link-pair-move:disabled { opacity: 0.25; cursor: default; }
+
+/* Fixed width so swapping the label to "✓ Copied" does not shove the buttons
+   beside it sideways. */
+#bulk-copy-name-btn { min-width: 104px; text-align: center; }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -351,6 +351,14 @@ ipcMain.handle('get-log-path', () => logFilePath);
 
 
 
+
+// Electron's own clipboard rather than navigator.clipboard: the renderer is
+// loaded with loadFile, so it runs on a file:// origin where the web clipboard
+// API is not dependable.
+ipcMain.handle('copy-to-clipboard', (_e, text) => {
+  clipboard.writeText(String(text == null ? '' : text));
+  return true;
+});
 
 ipcMain.handle('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
