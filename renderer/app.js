@@ -61,6 +61,7 @@ const state = {
   selectedIds: new Set(), // multi-selected rows in the active table, for bulk actions
   selectionAnchorId: null, // last row touched by a plain/Cmd click, for Shift-click ranges
   workingDirectory: '', // folder searched by "Set Previews" for "<task>_1x1.png" files
+  autoFixRatio: false, // crop off-ratio statics on add, without asking
   driveAccountIndex: '', // Google account index (drive.google.com/drive/u/N/...) for rewriting Drive links before opening; '' = no rewriting
 };
 
@@ -209,6 +210,7 @@ async function boot() {
   log('boot: checking for API key');
   const settings = await window.app.getSettings();
   state.workingDirectory = settings.workingDirectory || '';
+  state.autoFixRatio = settings.autoFixRatio === true;
   state.driveAccountIndex = settings.driveAccountIndex || '';
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
@@ -1758,6 +1760,42 @@ function ratioFromDimensions(w, h) {
   return '9x16';
 }
 
+// Crops one pending file to its exact ratio, in place, then re-measures it so
+// the list reflects the file on disk rather than what we intended to write.
+async function applyRatioCrop(file, { silent = false } = {}) {
+  if (!file || !file.cropPlan) return false;
+  const plan = file.cropPlan;
+  try {
+    const { after } = await window.app.cropImageToRatio(file.path, {
+      x: plan.x, y: plan.y, width: plan.width, height: plan.height,
+    });
+    file.width = after.width;
+    file.height = after.height;
+    file.ratio = ratioFromDimensions(after.width, after.height);
+    file.cropPlan = planRatioCrop(after.width, after.height, file.ratio);
+    log(`applyRatioCrop: ${file.name} cropped ${plan.pixels}px of ${plan.axis} -> ${after.width}x${after.height}`);
+    if (!silent) renderFileList();
+    return true;
+  } catch (err) {
+    file.error = `Crop failed: ${err.message}`;
+    log(`applyRatioCrop: FAILED for ${file.name} — ${err.message}`);
+    if (!silent) renderFileList();
+    return false;
+  }
+}
+
+async function applyAllRatioCrops() {
+  const pending = state.pendingFiles.filter(f => f.cropPlan);
+  if (!pending.length) return;
+  const btn = document.getElementById('fix-ratios-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cropping...'; }
+  let done = 0;
+  for (const f of pending) if (await applyRatioCrop(f, { silent: true })) done += 1;
+  if (btn) { btn.disabled = false; btn.textContent = 'Fix ratios'; }
+  renderFileList();
+  log(`applyAllRatioCrops: cropped ${done}/${pending.length} file(s)`);
+}
+
 // ── File handling ────────────────────────────────────────────────────────
 
 async function addFiles(paths) {
@@ -1768,7 +1806,13 @@ async function addFiles(paths) {
     try {
       const dims = await window.app.getFileDimensions(p);
       const ratio = ratioFromDimensions(dims.width, dims.height);
-      state.pendingFiles.push({ path: p, name, width: dims.width, height: dims.height, ratio });
+      const entry = { path: p, name, width: dims.width, height: dims.height, ratio };
+      // Higgsfield nodes emit sizes that are a fraction of a percent off their
+      // nominal ratio (1520x2688, 1536x2752, 2752x1536). Flag it here so it is
+      // caught before the file is renamed and delivered.
+      entry.cropPlan = planRatioCrop(dims.width, dims.height, ratio);
+      state.pendingFiles.push(entry);
+      if (entry.cropPlan && state.autoFixRatio) await applyRatioCrop(entry, { silent: true });
     } catch (err) {
       state.pendingFiles.push({ path: p, name, error: err.message });
     }
@@ -1811,6 +1855,17 @@ function renderFileList() {
       row.appendChild(makeSpan('ftype ratio', f.ratio));
       row.appendChild(makeSpan('farrow', '→'));
       row.appendChild(makeSpan('fnew', newName, newName));
+      if (f.cropPlan) {
+        row.classList.add('off-ratio');
+        row.appendChild(makeSpan('fratio-warn', `⚠ ${(f.cropPlan.deviation * 100).toFixed(2)}%`,
+          describeRatioCrop(f.cropPlan, f.ratio)));
+        const fix = document.createElement('button');
+        fix.className = 'fratio-fix';
+        fix.textContent = `Crop ${f.cropPlan.pixels}px`;
+        fix.title = describeRatioCrop(f.cropPlan, f.ratio);
+        fix.onclick = () => applyRatioCrop(f);
+        row.appendChild(fix);
+      }
     }
     list.appendChild(row);
   });
@@ -1824,6 +1879,16 @@ function renderFileList() {
   } else {
     warn.textContent = '';
   }
+
+  const offRatio = state.pendingFiles.filter(f => f.cropPlan);
+  const fixRow = document.getElementById('fix-ratios-row');
+  fixRow.classList.toggle('hidden', offRatio.length === 0);
+  if (offRatio.length) {
+    document.getElementById('fix-ratios-note').textContent =
+      `${offRatio.length} file(s) are not exactly their ratio — cropping loses at most `
+      + `${Math.max(...offRatio.map(f => f.cropPlan.pixels))}px.`;
+  }
+  document.getElementById('auto-fix-ratio-input').checked = Boolean(state.autoFixRatio);
 
   footer.classList.remove('hidden');
 }
@@ -2473,6 +2538,17 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   taskSearchInput.focus();
   taskSearchInput.select();
+});
+
+document.getElementById('fix-ratios-btn').addEventListener('click', applyAllRatioCrops);
+
+document.getElementById('auto-fix-ratio-input').addEventListener('change', async (e) => {
+  state.autoFixRatio = e.target.checked;
+  await window.app.saveSettings({ autoFixRatio: state.autoFixRatio });
+  log(`auto-fix-ratio: ${state.autoFixRatio ? 'on' : 'off'}`);
+  // Switching it on fixes whatever is already waiting, rather than only
+  // applying to the next batch.
+  if (state.autoFixRatio) applyAllRatioCrops();
 });
 
 document.getElementById('bulk-copy-name-btn').addEventListener('click', copySelectedTaskNames);

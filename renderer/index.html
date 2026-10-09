@@ -147,6 +147,13 @@
       Drop files here or <button id="browse-files-btn">browse</button>
     </div>
     <div id="file-list"></div>
+    <div id="fix-ratios-row" class="hidden">
+      <span id="fix-ratios-note"></span>
+      <button id="fix-ratios-btn" title="Crop these files to their exact aspect ratio, centred. Never stretches, never upscales.">Fix ratios</button>
+      <label id="auto-fix-ratio-label" title="Remember this: off-ratio files are cropped as soon as they are added.">
+        <input type="checkbox" id="auto-fix-ratio-input"> Always fix automatically
+      </label>
+    </div>
     <div id="rename-footer" class="hidden">
       <span id="rename-warning"></span>
       <button id="clear-files-btn">Clear</button>
@@ -235,6 +242,7 @@
   <script src="dashboard-data.js"></script>
   <script src="markdown-data.js"></script>
   <script src="drive-links.js"></script>
+  <script src="ratio-fix.js"></script>
   <script src="task-refs.js"></script>
   <script src="task-search.js"></script>
   <script src="link-paste.js"></script>

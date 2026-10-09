@@ -380,3 +380,12 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 /* Fixed width so swapping the label to "✓ Copied" does not shove the buttons
    beside it sideways. */
 #bulk-copy-name-btn { min-width: 104px; text-align: center; }
+
+/* Off-ratio statics: warning, per-file fix, and the remembered choice */
+#fix-ratios-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-2) 0; font-size: 11px; color: #d29922; }
+#fix-ratios-note { flex: 1; min-width: 180px; }
+#auto-fix-ratio-label { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); cursor: pointer; }
+#auto-fix-ratio-label input[type=checkbox] { width: auto; }
+.file-row.off-ratio .fdims { color: #d29922; }
+.fratio-warn { color: #d29922; font-size: 10px; flex-shrink: 0; }
+.fratio-fix { flex-shrink: 0; padding: 1px var(--space-3); font-size: 10px; }

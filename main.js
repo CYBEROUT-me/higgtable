@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -450,6 +450,42 @@ ipcMain.handle('get-video-duration', (_e, filePath) => {
 ipcMain.handle('get-file-dimensions', (_e, filePath) => {
   try { return getFileDimensions(filePath); }
   catch (err) { throw new Error(err.message); }
+});
+
+// Crops an image in place to an exact aspect ratio. Uses Electron's own
+// nativeImage, so no image-processing dependency is added.
+//
+// Writes the result only after re-measuring it: a crop that silently produced
+// the wrong size would ship a distorted creative, which is the very thing this
+// exists to prevent. PNG re-encodes losslessly; JPEG is written back at high
+// quality, since re-encoding it is unavoidable.
+ipcMain.handle('crop-image-to-ratio', (_e, filePath, box) => {
+  const ext = path.extname(filePath).toLowerCase();
+  if (!IMAGE_EXTS.has(ext)) throw new Error(`Not an image: ${ext}`);
+  if (!fs.existsSync(filePath)) throw new Error(`No such file: ${filePath}`);
+  if (!box || !(box.width > 0) || !(box.height > 0)) throw new Error('Invalid crop box');
+
+  const before = getImageDimensions(filePath);
+  if (box.x < 0 || box.y < 0
+      || box.x + box.width > before.width || box.y + box.height > before.height) {
+    throw new Error(`Crop ${box.width}x${box.height}+${box.x}+${box.y} does not fit in ${before.width}x${before.height}`);
+  }
+
+  const img = nativeImage.createFromPath(filePath);
+  if (img.isEmpty()) throw new Error('Could not decode the image');
+  const cropped = img.crop({ x: box.x, y: box.y, width: box.width, height: box.height });
+  const out = (ext === '.jpg' || ext === '.jpeg') ? cropped.toJPEG(95) : cropped.toPNG();
+  if (!out || !out.length) throw new Error('Re-encoding produced no data');
+
+  fs.writeFileSync(filePath, out);
+
+  // Verify against the file on disk rather than trusting the in-memory result.
+  const after = getImageDimensions(filePath);
+  if (after.width !== box.width || after.height !== box.height) {
+    throw new Error(`Crop wrote ${after.width}x${after.height}, expected ${box.width}x${box.height}`);
+  }
+  log(`crop-image-to-ratio: ${path.basename(filePath)} ${before.width}x${before.height} -> ${after.width}x${after.height}`);
+  return { before, after };
 });
 
 ipcMain.handle('rename-file', (_e, fromPath, toPath) => {
