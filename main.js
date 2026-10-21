@@ -452,39 +452,58 @@ ipcMain.handle('get-file-dimensions', (_e, filePath) => {
   catch (err) { throw new Error(err.message); }
 });
 
-// Crops an image in place to an exact aspect ratio. Uses Electron's own
-// nativeImage, so no image-processing dependency is added.
+// Corrects an image in place: crop to the exact aspect ratio, then downscale to
+// the canonical delivery size (1080x1920 / 1920x1080). Either step may be
+// absent. Uses Electron's own nativeImage, so no image dependency is added.
 //
-// Writes the result only after re-measuring it: a crop that silently produced
-// the wrong size would ship a distorted creative, which is the very thing this
-// exists to prevent. PNG re-encodes losslessly; JPEG is written back at high
-// quality, since re-encoding it is unavoidable.
-ipcMain.handle('crop-image-to-ratio', (_e, filePath, box) => {
+// The file is re-measured after writing: a correction that silently produced
+// the wrong size would ship a distorted or off-spec creative, which is the very
+// thing this exists to prevent. Never upscales — the planner only asks for a
+// resize when the cropped frame is at least the target size, and this refuses
+// one that would grow the image regardless. PNG re-encodes losslessly; JPEG is
+// written back at quality 95.
+ipcMain.handle('normalize-image', (_e, filePath, plan) => {
   const ext = path.extname(filePath).toLowerCase();
   if (!IMAGE_EXTS.has(ext)) throw new Error(`Not an image: ${ext}`);
   if (!fs.existsSync(filePath)) throw new Error(`No such file: ${filePath}`);
-  if (!box || !(box.width > 0) || !(box.height > 0)) throw new Error('Invalid crop box');
+  const crop = plan && plan.crop;
+  const resize = plan && plan.resize;
+  if (!crop && !resize) throw new Error('Nothing to do');
 
   const before = getImageDimensions(filePath);
-  if (box.x < 0 || box.y < 0
-      || box.x + box.width > before.width || box.y + box.height > before.height) {
-    throw new Error(`Crop ${box.width}x${box.height}+${box.x}+${box.y} does not fit in ${before.width}x${before.height}`);
+  let img = nativeImage.createFromPath(filePath);
+  if (img.isEmpty()) throw new Error('Could not decode the image');
+  let w = before.width;
+  let h = before.height;
+
+  if (crop) {
+    if (crop.x < 0 || crop.y < 0 || crop.x + crop.width > w || crop.y + crop.height > h) {
+      throw new Error(`Crop ${crop.width}x${crop.height}+${crop.x}+${crop.y} does not fit in ${w}x${h}`);
+    }
+    img = img.crop({ x: crop.x, y: crop.y, width: crop.width, height: crop.height });
+    w = crop.width;
+    h = crop.height;
   }
 
-  const img = nativeImage.createFromPath(filePath);
-  if (img.isEmpty()) throw new Error('Could not decode the image');
-  const cropped = img.crop({ x: box.x, y: box.y, width: box.width, height: box.height });
-  const out = (ext === '.jpg' || ext === '.jpeg') ? cropped.toJPEG(95) : cropped.toPNG();
-  if (!out || !out.length) throw new Error('Re-encoding produced no data');
+  if (resize) {
+    if (resize.width > w || resize.height > h) {
+      throw new Error(`Refusing to upscale ${w}x${h} to ${resize.width}x${resize.height}`);
+    }
+    img = img.resize({ width: resize.width, height: resize.height, quality: 'best' });
+    w = resize.width;
+    h = resize.height;
+  }
 
+  const out = (ext === '.jpg' || ext === '.jpeg') ? img.toJPEG(95) : img.toPNG();
+  if (!out || !out.length) throw new Error('Re-encoding produced no data');
   fs.writeFileSync(filePath, out);
 
-  // Verify against the file on disk rather than trusting the in-memory result.
   const after = getImageDimensions(filePath);
-  if (after.width !== box.width || after.height !== box.height) {
-    throw new Error(`Crop wrote ${after.width}x${after.height}, expected ${box.width}x${box.height}`);
+  if (after.width !== w || after.height !== h) {
+    throw new Error(`Wrote ${after.width}x${after.height}, expected ${w}x${h}`);
   }
-  log(`crop-image-to-ratio: ${path.basename(filePath)} ${before.width}x${before.height} -> ${after.width}x${after.height}`);
+  log(`normalize-image: ${path.basename(filePath)} ${before.width}x${before.height} -> ${after.width}x${after.height}`
+    + `${crop ? ' (cropped)' : ''}${resize ? ' (scaled)' : ''}`);
   return { before, after };
 });
 

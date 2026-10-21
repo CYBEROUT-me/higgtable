@@ -20,6 +20,17 @@ const EXACT_RATIOS = {
   '9x16': 9 / 16,
 };
 
+// The size every creative should be delivered at, once its ratio is correct.
+// Higgsfield emits 2688px-tall frames; ads ship at 1080x1920, so the fix is a
+// crop to the exact ratio followed by a downscale to the canonical size.
+//
+// Only the two ratios that are actually delivered are listed. A label with no
+// canonical size keeps its native resolution after cropping.
+const CANONICAL_SIZES = {
+  '9x16': { width: 1080, height: 1920 },
+  '16x9': { width: 1920, height: 1080 },
+};
+
 // A crop this small or smaller is left alone. Expressing the threshold in PIXELS
 // rather than percent is deliberate: a percentage tolerance means the same
 // visual error is forgiven on a small image and flagged on a large one. One
@@ -89,6 +100,60 @@ function describeRatioCrop(plan, label) {
     + ` (${plan.perSide}px each side) → ${plan.width}×${plan.height}`;
 }
 
+
+// The complete correction for a file: crop to the exact ratio, then downscale to
+// the canonical delivery size. Returns null when the file is already correct.
+//
+// Either half can be absent. A file that is already an exact 9:16 at 2160x3840
+// needs no crop but does need resizing; a 1080x1920 file needs neither. The
+// resize is skipped entirely when the cropped frame is SMALLER than canonical,
+// because upscaling would invent detail that was never captured — such a file
+// keeps its own resolution and only has its ratio corrected.
+function planRatioFix(width, height, label) {
+  if (!EXACT_RATIOS[label] || !(width > 0) || !(height > 0)) return null;
+
+  const crop = planRatioCrop(width, height, label);
+  const afterCropWidth = crop ? crop.width : width;
+  const afterCropHeight = crop ? crop.height : height;
+
+  const canonical = CANONICAL_SIZES[label];
+  let resize = null;
+  if (canonical
+      && (afterCropWidth !== canonical.width || afterCropHeight !== canonical.height)
+      && afterCropWidth >= canonical.width && afterCropHeight >= canonical.height) {
+    resize = { width: canonical.width, height: canonical.height };
+  }
+
+  if (!crop && !resize) return null;
+  return {
+    crop,
+    resize,
+    finalWidth: resize ? resize.width : afterCropWidth,
+    finalHeight: resize ? resize.height : afterCropHeight,
+    // True when the frame is below the delivery size, so it was left as-is.
+    belowCanonical: Boolean(canonical && !resize
+      && (afterCropWidth < canonical.width || afterCropHeight < canonical.height)),
+  };
+}
+
+// One line for the file list: what is wrong and what the fix does.
+function describeRatioFix(fix, label, width, height) {
+  if (!fix) return null;
+  const parts = [];
+  if (fix.crop) {
+    parts.push(`off ${label} by ${fix.crop.deviation > 0 ? '+' : ''}`
+      + `${(fix.crop.deviation * 100).toFixed(2)}% — crop ${fix.crop.pixels}px of ${fix.crop.axis}`
+      + ` (${fix.crop.perSide}px each side)`);
+  }
+  if (fix.resize) parts.push(`scale to the ${label} delivery size`);
+  if (fix.belowCanonical) parts.push('below the delivery size, so resolution is kept');
+  return `${parts.join('; ')} → ${fix.finalWidth}×${fix.finalHeight}`;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { EXACT_RATIOS, MIN_CROP_PIXELS, ratioDeviation, planRatioCrop, describeRatioCrop };
+  module.exports = {
+    EXACT_RATIOS, CANONICAL_SIZES, MIN_CROP_PIXELS,
+    ratioDeviation, planRatioCrop, describeRatioCrop,
+    planRatioFix, describeRatioFix,
+  };
 }

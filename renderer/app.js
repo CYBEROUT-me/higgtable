@@ -1760,24 +1760,27 @@ function ratioFromDimensions(w, h) {
   return '9x16';
 }
 
-// Crops one pending file to its exact ratio, in place, then re-measures it so
-// the list reflects the file on disk rather than what we intended to write.
+// Corrects one pending file in place — crop to the exact ratio, then scale to
+// the delivery size — and re-measures it, so the list reflects the file on disk
+// rather than what we intended to write.
 async function applyRatioCrop(file, { silent = false } = {}) {
-  if (!file || !file.cropPlan) return false;
-  const plan = file.cropPlan;
+  if (!file || !file.fixPlan) return false;
+  const plan = file.fixPlan;
   try {
-    const { after } = await window.app.cropImageToRatio(file.path, {
-      x: plan.x, y: plan.y, width: plan.width, height: plan.height,
+    const { after } = await window.app.normalizeImage(file.path, {
+      crop: plan.crop && { x: plan.crop.x, y: plan.crop.y, width: plan.crop.width, height: plan.crop.height },
+      resize: plan.resize,
     });
     file.width = after.width;
     file.height = after.height;
     file.ratio = ratioFromDimensions(after.width, after.height);
-    file.cropPlan = planRatioCrop(after.width, after.height, file.ratio);
-    log(`applyRatioCrop: ${file.name} cropped ${plan.pixels}px of ${plan.axis} -> ${after.width}x${after.height}`);
+    file.fixPlan = planRatioFix(after.width, after.height, file.ratio);
+    log(`applyRatioCrop: ${file.name} -> ${after.width}x${after.height}`
+      + `${plan.crop ? ` (cropped ${plan.crop.pixels}px of ${plan.crop.axis})` : ''}${plan.resize ? ' (scaled)' : ''}`);
     if (!silent) renderFileList();
     return true;
   } catch (err) {
-    file.error = `Crop failed: ${err.message}`;
+    file.error = `Fix failed: ${err.message}`;
     log(`applyRatioCrop: FAILED for ${file.name} — ${err.message}`);
     if (!silent) renderFileList();
     return false;
@@ -1785,7 +1788,7 @@ async function applyRatioCrop(file, { silent = false } = {}) {
 }
 
 async function applyAllRatioCrops() {
-  const pending = state.pendingFiles.filter(f => f.cropPlan);
+  const pending = state.pendingFiles.filter(f => f.fixPlan);
   if (!pending.length) return;
   const btn = document.getElementById('fix-ratios-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Cropping...'; }
@@ -1810,9 +1813,9 @@ async function addFiles(paths) {
       // Higgsfield nodes emit sizes that are a fraction of a percent off their
       // nominal ratio (1520x2688, 1536x2752, 2752x1536). Flag it here so it is
       // caught before the file is renamed and delivered.
-      entry.cropPlan = planRatioCrop(dims.width, dims.height, ratio);
+      entry.fixPlan = planRatioFix(dims.width, dims.height, ratio);
       state.pendingFiles.push(entry);
-      if (entry.cropPlan && state.autoFixRatio) await applyRatioCrop(entry, { silent: true });
+      if (entry.fixPlan && state.autoFixRatio) await applyRatioCrop(entry, { silent: true });
     } catch (err) {
       state.pendingFiles.push({ path: p, name, error: err.message });
     }
@@ -1855,14 +1858,18 @@ function renderFileList() {
       row.appendChild(makeSpan('ftype ratio', f.ratio));
       row.appendChild(makeSpan('farrow', '→'));
       row.appendChild(makeSpan('fnew', newName, newName));
-      if (f.cropPlan) {
+      if (f.fixPlan) {
         row.classList.add('off-ratio');
-        row.appendChild(makeSpan('fratio-warn', `⚠ ${(f.cropPlan.deviation * 100).toFixed(2)}%`,
-          describeRatioCrop(f.cropPlan, f.ratio)));
+        // Lead with the ratio error when there is one; otherwise the file is the
+        // right shape but not the delivery size.
+        const warnText = f.fixPlan.crop
+          ? `⚠ ${(f.fixPlan.crop.deviation * 100).toFixed(2)}%`
+          : '⚠ size';
+        row.appendChild(makeSpan('fratio-warn', warnText, describeRatioFix(f.fixPlan, f.ratio)));
         const fix = document.createElement('button');
         fix.className = 'fratio-fix';
-        fix.textContent = `Crop ${f.cropPlan.pixels}px`;
-        fix.title = describeRatioCrop(f.cropPlan, f.ratio);
+        fix.textContent = `Fix → ${f.fixPlan.finalWidth}×${f.fixPlan.finalHeight}`;
+        fix.title = describeRatioFix(f.fixPlan, f.ratio);
         fix.onclick = () => applyRatioCrop(f);
         row.appendChild(fix);
       }
@@ -1880,13 +1887,13 @@ function renderFileList() {
     warn.textContent = '';
   }
 
-  const offRatio = state.pendingFiles.filter(f => f.cropPlan);
+  const offRatio = state.pendingFiles.filter(f => f.fixPlan);
   const fixRow = document.getElementById('fix-ratios-row');
   fixRow.classList.toggle('hidden', offRatio.length === 0);
   if (offRatio.length) {
     document.getElementById('fix-ratios-note').textContent =
-      `${offRatio.length} file(s) are not exactly their ratio — cropping loses at most `
-      + `${Math.max(...offRatio.map(f => f.cropPlan.pixels))}px.`;
+      `${offRatio.length} file(s) need fixing — exact ratio, then 1080×1920 / 1920×1080. `
+      + `Cropping loses at most ${Math.max(0, ...offRatio.map(f => (f.fixPlan.crop ? f.fixPlan.crop.pixels : 0)))}px.`;
   }
   document.getElementById('auto-fix-ratio-input').checked = Boolean(state.autoFixRatio);
 

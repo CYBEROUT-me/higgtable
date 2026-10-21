@@ -1,4 +1,7 @@
-const { EXACT_RATIOS, MIN_CROP_PIXELS, ratioDeviation, planRatioCrop, describeRatioCrop } =
+const {
+  EXACT_RATIOS, CANONICAL_SIZES, MIN_CROP_PIXELS, ratioDeviation, planRatioCrop, describeRatioCrop,
+  planRatioFix, describeRatioFix,
+} =
   require('../renderer/ratio-fix');
 
 // The three real Higgsfield outputs that prompted this.
@@ -123,5 +126,85 @@ describe('describeRatioCrop', () => {
 
   test('is null when there is nothing to fix', () => {
     expect(describeRatioCrop(null, '9x16')).toBeNull();
+  });
+});
+
+// Delivery size: every 9x16 leaves as 1080x1920 and every 16x9 as 1920x1080.
+describe('planRatioFix — normalising to the delivery size', () => {
+  test('the canonical sizes are the delivery specs', () => {
+    expect(CANONICAL_SIZES['9x16']).toEqual({ width: 1080, height: 1920 });
+    expect(CANONICAL_SIZES['16x9']).toEqual({ width: 1920, height: 1080 });
+  });
+
+  test.each([
+    [1520, 2688, '9x16', 1080, 1920],
+    [1536, 2752, '9x16', 1080, 1920],
+    [2752, 1536, '16x9', 1920, 1080],
+    [2688, 1520, '16x9', 1920, 1080],
+  ])('%ix%i (%s) is cropped and then scaled to %ix%i', (w, h, label, fw, fh) => {
+    const fix = planRatioFix(w, h, label);
+    expect(fix.crop).not.toBeNull();
+    expect(fix.resize).toEqual({ width: fw, height: fh });
+    expect([fix.finalWidth, fix.finalHeight]).toEqual([fw, fh]);
+  });
+
+  test('the crop happens before the scale, so the scale is a pure downscale of an exact ratio', () => {
+    const fix = planRatioFix(1520, 2688, '9x16');
+    expect(fix.crop.width / fix.crop.height).toBeCloseTo(9 / 16, 3);
+    expect(fix.resize.width).toBeLessThanOrEqual(fix.crop.width);
+    expect(fix.resize.height).toBeLessThanOrEqual(fix.crop.height);
+  });
+
+  test('an exact ratio at the wrong size is only scaled, not cropped', () => {
+    const fix = planRatioFix(2160, 3840, '9x16');
+    expect(fix.crop).toBeNull();
+    expect(fix.resize).toEqual({ width: 1080, height: 1920 });
+  });
+
+  test('a file already at the delivery size needs nothing', () => {
+    expect(planRatioFix(1080, 1920, '9x16')).toBeNull();
+    expect(planRatioFix(1920, 1080, '16x9')).toBeNull();
+  });
+
+  test('never upscales: a frame below delivery size keeps its resolution', () => {
+    // Exact ratio, too small — nothing can be done without inventing detail.
+    expect(planRatioFix(900, 1600, '9x16')).toBeNull();
+    // Off-ratio and too small — the ratio is fixed, the size is left alone.
+    const fix = planRatioFix(910, 1600, '9x16');
+    expect(fix.crop).not.toBeNull();
+    expect(fix.resize).toBeNull();
+    expect(fix.belowCanonical).toBe(true);
+    expect(fix.finalWidth).toBeLessThan(1080);
+  });
+
+  test('a ratio with no delivery size is cropped but keeps its resolution', () => {
+    const fix = planRatioFix(1100, 1000, '1x1');
+    expect(fix.crop).toMatchObject({ width: 1000, height: 1000 });
+    expect(fix.resize).toBeNull();
+    expect(fix.belowCanonical).toBe(false);
+  });
+
+  test('refuses nonsense input', () => {
+    expect(planRatioFix(0, 100, '9x16')).toBeNull();
+    expect(planRatioFix(100, 100, 'nope')).toBeNull();
+  });
+});
+
+describe('describeRatioFix', () => {
+  test('describes a crop plus a scale', () => {
+    const text = describeRatioFix(planRatioFix(1520, 2688, '9x16'), '9x16');
+    expect(text).toContain('crop 8px of width');
+    expect(text).toContain('scale');
+    expect(text).toContain('1080×1920');
+  });
+
+  test('describes a scale alone', () => {
+    const text = describeRatioFix(planRatioFix(2160, 3840, '9x16'), '9x16');
+    expect(text).not.toContain('crop');
+    expect(text).toContain('1080×1920');
+  });
+
+  test('is null when there is nothing to do', () => {
+    expect(describeRatioFix(null, '9x16')).toBeNull();
   });
 });
