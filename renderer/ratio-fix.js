@@ -101,14 +101,16 @@ function describeRatioCrop(plan, label) {
 }
 
 
-// The complete correction for a file: crop to the exact ratio, then downscale to
+// The complete correction for a file: crop to the exact ratio, then scale to
 // the canonical delivery size. Returns null when the file is already correct.
 //
 // Either half can be absent. A file that is already an exact 9:16 at 2160x3840
-// needs no crop but does need resizing; a 1080x1920 file needs neither. The
-// resize is skipped entirely when the cropped frame is SMALLER than canonical,
-// because upscaling would invent detail that was never captured — such a file
-// keeps its own resolution and only has its ratio corrected.
+// needs no crop but does need scaling; a 1080x1920 file needs neither.
+//
+// Scaling goes in BOTH directions. Higgsfield also emits 768x1365, and the
+// delivery spec is 1080x1920 regardless — a smaller file risks rejection by the
+// ad platform, not just a softer look. An upscale cannot add detail, so it is
+// marked `upscale` and the UI says so rather than presenting it as lossless.
 function planRatioFix(width, height, label) {
   if (!EXACT_RATIOS[label] || !(width > 0) || !(height > 0)) return null;
 
@@ -118,21 +120,19 @@ function planRatioFix(width, height, label) {
 
   const canonical = CANONICAL_SIZES[label];
   let resize = null;
-  if (canonical
-      && (afterCropWidth !== canonical.width || afterCropHeight !== canonical.height)
-      && afterCropWidth >= canonical.width && afterCropHeight >= canonical.height) {
+  if (canonical && (afterCropWidth !== canonical.width || afterCropHeight !== canonical.height)) {
     resize = { width: canonical.width, height: canonical.height };
   }
 
   if (!crop && !resize) return null;
+  const scale = resize ? resize.width / afterCropWidth : 1;
   return {
     crop,
     resize,
     finalWidth: resize ? resize.width : afterCropWidth,
     finalHeight: resize ? resize.height : afterCropHeight,
-    // True when the frame is below the delivery size, so it was left as-is.
-    belowCanonical: Boolean(canonical && !resize
-      && (afterCropWidth < canonical.width || afterCropHeight < canonical.height)),
+    scale,
+    upscale: scale > 1,
   };
 }
 
@@ -145,8 +145,11 @@ function describeRatioFix(fix, label, width, height) {
       + `${(fix.crop.deviation * 100).toFixed(2)}% — crop ${fix.crop.pixels}px of ${fix.crop.axis}`
       + ` (${fix.crop.perSide}px each side)`);
   }
-  if (fix.resize) parts.push(`scale to the ${label} delivery size`);
-  if (fix.belowCanonical) parts.push('below the delivery size, so resolution is kept');
+  if (fix.resize) {
+    parts.push(fix.upscale
+      ? `upscale ${fix.scale.toFixed(2)}× to the ${label} delivery size (cannot add detail)`
+      : `scale to the ${label} delivery size`);
+  }
   return `${parts.join('; ')} → ${fix.finalWidth}×${fix.finalHeight}`;
 }
 

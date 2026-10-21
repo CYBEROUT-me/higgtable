@@ -166,22 +166,40 @@ describe('planRatioFix — normalising to the delivery size', () => {
     expect(planRatioFix(1920, 1080, '16x9')).toBeNull();
   });
 
-  test('never upscales: a frame below delivery size keeps its resolution', () => {
-    // Exact ratio, too small — nothing can be done without inventing detail.
-    expect(planRatioFix(900, 1600, '9x16')).toBeNull();
-    // Off-ratio and too small — the ratio is fixed, the size is left alone.
+  test('upscales a frame below the delivery size, and says so', () => {
+    // Higgsfield also emits 768x1365. The spec is 1080x1920 regardless — a small
+    // file risks rejection — so it is scaled up, and flagged as an upscale.
+    const fix = planRatioFix(768, 1365, '9x16');
+    expect(fix.crop).toBeNull();                       // ratio already exact
+    expect(fix.resize).toEqual({ width: 1080, height: 1920 });
+    expect(fix.upscale).toBe(true);
+    expect(fix.scale).toBeCloseTo(1.406, 2);
+  });
+
+  test('upscales 16x9 the same way', () => {
+    const fix = planRatioFix(1365, 768, '16x9');
+    expect(fix.resize).toEqual({ width: 1920, height: 1080 });
+    expect(fix.upscale).toBe(true);
+  });
+
+  test('an off-ratio small frame is cropped and then scaled up', () => {
     const fix = planRatioFix(910, 1600, '9x16');
     expect(fix.crop).not.toBeNull();
-    expect(fix.resize).toBeNull();
-    expect(fix.belowCanonical).toBe(true);
-    expect(fix.finalWidth).toBeLessThan(1080);
+    expect(fix.resize).toEqual({ width: 1080, height: 1920 });
+    expect(fix.upscale).toBe(true);
+  });
+
+  test('a downscale is not marked as an upscale', () => {
+    const fix = planRatioFix(1520, 2688, '9x16');
+    expect(fix.upscale).toBe(false);
+    expect(fix.scale).toBeLessThan(1);
   });
 
   test('a ratio with no delivery size is cropped but keeps its resolution', () => {
     const fix = planRatioFix(1100, 1000, '1x1');
     expect(fix.crop).toMatchObject({ width: 1000, height: 1000 });
     expect(fix.resize).toBeNull();
-    expect(fix.belowCanonical).toBe(false);
+    expect(fix.upscale).toBe(false);
   });
 
   test('refuses nonsense input', () => {
@@ -207,4 +225,11 @@ describe('describeRatioFix', () => {
   test('is null when there is nothing to do', () => {
     expect(describeRatioFix(null, '9x16')).toBeNull();
   });
+});
+
+test('describeRatioFix labels an upscale honestly', () => {
+  const text = describeRatioFix(planRatioFix(768, 1365, '9x16'), '9x16');
+  expect(text).toContain('upscale 1.41×');
+  expect(text).toContain('cannot add detail');
+  expect(text).toContain('1080×1920');
 });

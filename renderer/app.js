@@ -1864,7 +1864,7 @@ function renderFileList() {
         // right shape but not the delivery size.
         const warnText = f.fixPlan.crop
           ? `⚠ ${(f.fixPlan.crop.deviation * 100).toFixed(2)}%`
-          : '⚠ size';
+          : (f.fixPlan.upscale ? `⚠ small ×${f.fixPlan.scale.toFixed(2)}` : '⚠ size');
         row.appendChild(makeSpan('fratio-warn', warnText, describeRatioFix(f.fixPlan, f.ratio)));
         const fix = document.createElement('button');
         fix.className = 'fratio-fix';

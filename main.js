@@ -458,10 +458,8 @@ ipcMain.handle('get-file-dimensions', (_e, filePath) => {
 //
 // The file is re-measured after writing: a correction that silently produced
 // the wrong size would ship a distorted or off-spec creative, which is the very
-// thing this exists to prevent. Never upscales — the planner only asks for a
-// resize when the cropped frame is at least the target size, and this refuses
-// one that would grow the image regardless. PNG re-encodes losslessly; JPEG is
-// written back at quality 95.
+// thing this exists to prevent. PNG re-encodes losslessly; JPEG is written back
+// at quality 95.
 ipcMain.handle('normalize-image', (_e, filePath, plan) => {
   const ext = path.extname(filePath).toLowerCase();
   if (!IMAGE_EXTS.has(ext)) throw new Error(`Not an image: ${ext}`);
@@ -486,9 +484,9 @@ ipcMain.handle('normalize-image', (_e, filePath, plan) => {
   }
 
   if (resize) {
-    if (resize.width > w || resize.height > h) {
-      throw new Error(`Refusing to upscale ${w}x${h} to ${resize.width}x${resize.height}`);
-    }
+    // Scales either way: the delivery spec is a fixed size, and frames below it
+    // (768x1365 from Higgsfield) must be brought up to it. The ratio is already
+    // exact at this point, so the scale is uniform — nothing is stretched.
     img = img.resize({ width: resize.width, height: resize.height, quality: 'best' });
     w = resize.width;
     h = resize.height;
