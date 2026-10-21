@@ -24,11 +24,12 @@ const EXACT_RATIOS = {
 // Higgsfield emits 2688px-tall frames; ads ship at 1080x1920, so the fix is a
 // crop to the exact ratio followed by a downscale to the canonical size.
 //
-// Only the two ratios that are actually delivered are listed. A label with no
+// Only the ratios that are actually delivered are listed. A label with no
 // canonical size keeps its native resolution after cropping.
 const CANONICAL_SIZES = {
   '9x16': { width: 1080, height: 1920 },
   '16x9': { width: 1920, height: 1080 },
+  '1x1': { width: 1080, height: 1080 },
 };
 
 // A crop this small or smaller is left alone. Expressing the threshold in PIXELS

@@ -1892,7 +1892,7 @@ function renderFileList() {
   fixRow.classList.toggle('hidden', offRatio.length === 0);
   if (offRatio.length) {
     document.getElementById('fix-ratios-note').textContent =
-      `${offRatio.length} file(s) need fixing — exact ratio, then 1080×1920 / 1920×1080. `
+      `${offRatio.length} file(s) need fixing — exact ratio, then 1080×1920 / 1920×1080 / 1080×1080. `
       + `Cropping loses at most ${Math.max(0, ...offRatio.map(f => (f.fixPlan.crop ? f.fixPlan.crop.pixels : 0)))}px.`;
   }
   document.getElementById('auto-fix-ratio-input').checked = Boolean(state.autoFixRatio);

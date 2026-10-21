@@ -196,10 +196,24 @@ describe('planRatioFix — normalising to the delivery size', () => {
   });
 
   test('a ratio with no delivery size is cropped but keeps its resolution', () => {
-    const fix = planRatioFix(1100, 1000, '1x1');
-    expect(fix.crop).toMatchObject({ width: 1000, height: 1000 });
+    const fix = planRatioFix(1100, 1000, '4x5');
+    expect(fix.crop).not.toBeNull();
     expect(fix.resize).toBeNull();
     expect(fix.upscale).toBe(false);
+  });
+
+  test('1x1 is delivered at 1080x1080', () => {
+    expect(CANONICAL_SIZES['1x1']).toEqual({ width: 1080, height: 1080 });
+    // The reported Higgsfield square: exact ratio, scaled up.
+    expect(planRatioFix(1024, 1024, '1x1')).toMatchObject({
+      crop: null, resize: { width: 1080, height: 1080 }, upscale: true,
+    });
+    // Off-square: cropped to a square, then scaled down.
+    expect(planRatioFix(1100, 1000, '1x1')).toMatchObject({
+      crop: { width: 1000, height: 1000 }, resize: { width: 1080, height: 1080 },
+    });
+    expect(planRatioFix(2048, 2048, '1x1').upscale).toBe(false);
+    expect(planRatioFix(1080, 1080, '1x1')).toBeNull();
   });
 
   test('refuses nonsense input', () => {

@@ -453,7 +453,7 @@ ipcMain.handle('get-file-dimensions', (_e, filePath) => {
 });
 
 // Corrects an image in place: crop to the exact aspect ratio, then downscale to
-// the canonical delivery size (1080x1920 / 1920x1080). Either step may be
+// the canonical delivery size (1080x1920 / 1920x1080 / 1080x1080). Either step may be
 // absent. Uses Electron's own nativeImage, so no image dependency is added.
 //
 // The file is re-measured after writing: a correction that silently produced
