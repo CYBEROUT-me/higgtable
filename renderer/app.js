@@ -1889,11 +1889,17 @@ function renderFileList() {
 
   const offRatio = state.pendingFiles.filter(f => f.fixPlan);
   const fixRow = document.getElementById('fix-ratios-row');
-  fixRow.classList.toggle('hidden', offRatio.length === 0);
+  // With auto-fix on, files are fixed as they arrive and nothing is ever left
+  // to fix — the row must still show, or its checkbox could never be unticked.
+  fixRow.classList.toggle('hidden', offRatio.length === 0 && !state.autoFixRatio);
+  document.getElementById('fix-ratios-btn').classList.toggle('hidden', offRatio.length === 0);
   if (offRatio.length) {
     document.getElementById('fix-ratios-note').textContent =
       `${offRatio.length} file(s) need fixing — exact ratio, then 1080×1920 / 1920×1080 / 1080×1080. `
       + `Cropping loses at most ${Math.max(0, ...offRatio.map(f => (f.fixPlan.crop ? f.fixPlan.crop.pixels : 0)))}px.`;
+  } else {
+    document.getElementById('fix-ratios-note').textContent =
+      'Sizes are fixed automatically as files are added.';
   }
   document.getElementById('auto-fix-ratio-input').checked = Boolean(state.autoFixRatio);
 
