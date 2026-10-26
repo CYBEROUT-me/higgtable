@@ -6,11 +6,18 @@
   "scripts": {
     "start": "electron .",
     "test": "jest",
+    "fetch-ffmpeg": "node scripts/fetch-ffmpeg.js",
+    "prebuild": "npm run fetch-ffmpeg",
     "build": "electron-builder --mac",
+    "prebuild:win": "npm run fetch-ffmpeg",
     "build:win": "electron-builder --win",
+    "prebuild:all": "npm run fetch-ffmpeg",
     "build:all": "electron-builder --mac --win",
+    "prerelease": "npm run fetch-ffmpeg",
     "release": "electron-builder --mac --win --publish always",
+    "prerelease:mac": "npm run fetch-ffmpeg",
     "release:mac": "electron-builder --mac --publish always",
+    "prerelease:win": "npm run fetch-ffmpeg",
     "release:win": "electron-builder --win --publish always"
   },
   "devDependencies": {
@@ -26,7 +33,23 @@
       "!config.js",
       "!docs/**",
       "!tests/**",
-      "!*.md"
+      "!*.md",
+      "!vendor/**",
+      "!scripts/**",
+      "!.superpowers/**",
+      "!.claude/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/${os}-${arch}",
+        "to": "bin",
+        "filter": [
+          "ffmpeg",
+          "ffprobe",
+          "ffmpeg.exe",
+          "ffprobe.exe"
+        ]
+      }
     ],
     "mac": {
       "target": "dmg",

@@ -389,3 +389,40 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .file-row.off-ratio .fdims { color: #d29922; }
 .fratio-warn { color: #d29922; font-size: 10px; flex-shrink: 0; }
 .fratio-fix { flex-shrink: 0; padding: 1px var(--space-3); font-size: 10px; }
+
+/* ── Video resizer dialog ── */
+/* Same flex-column cap as the Autofill box: only the task list scrolls, so
+   Render / Cancel stays on screen for a long selection. */
+.resize-box { max-width: 720px; width: 92vw; max-height: 88vh; display: flex; flex-direction: column; }
+.resize-box > *:not(#resize-task-list) { flex-shrink: 0; }
+#resize-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.resize-chip { background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: 999px; padding: var(--space-1) var(--space-4); font-size: 12px; cursor: pointer; }
+.resize-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
+.resize-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.resize-chip small { margin-left: var(--space-2); opacity: 0.75; font-weight: 400; }
+.resize-chip:disabled { cursor: default; opacity: 0.6; }
+#resize-custom-row { display: flex; align-items: center; gap: var(--space-2); font-size: 12px; color: var(--text-secondary); margin-bottom: var(--space-5); }
+#resize-custom-row input[type=number] { width: 72px; margin: 0; padding: var(--space-1) var(--space-2); background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); border-radius: var(--radius-sm); font-size: 12px; font-family: monospace; }
+#resize-custom-row button { background: var(--bg-surface-2); border: 1px solid var(--border-strong); color: var(--text-primary); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-4); font-size: 12px; cursor: pointer; }
+#resize-custom-note { color: var(--text-muted); }
+#resize-task-list { flex: 1 1 auto; min-height: 60px; overflow-y: auto; margin-bottom: var(--space-5); }
+.resize-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 190px; gap: var(--space-4); align-items: center; padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border); font-size: 12px; }
+.resize-row-head { color: var(--text-muted); font-weight: 500; }
+.resize-row-name { font-family: monospace; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+.resize-row-source, .resize-row-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
+.resize-row-status { display: flex; align-items: center; gap: var(--space-3); }
+.resize-row-status > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.resize-box .ok { color: var(--accent); }
+.resize-box .warn { color: #e0a43a; }
+.resize-box .bad { color: #f66; }
+.resize-bar { flex-shrink: 0; width: 80px; height: 6px; background: var(--bg-app); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+.resize-bar i { display: block; height: 100%; background: var(--accent); }
+.resize-footer { align-items: center; }
+#resize-summary { flex: 1; font-size: 12px; color: var(--text-secondary); }
+#resize-render-btn:disabled { opacity: 0.5; cursor: default; }
+/* While running the button doubles as the overall progress bar. */
+#resize-render-btn.running {
+  background: linear-gradient(90deg, var(--accent-strong) var(--resize-progress, 0%), var(--bg-surface-2) var(--resize-progress, 0%));
+  color: var(--text-primary);
+  min-width: 130px;
+}

@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
+const { resolveBinary, probeVideo, renderPlan } = require('./resizer');
+const resizePlan = require('./renderer/resize-plan');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -413,6 +415,172 @@ ipcMain.handle('find-asset-files', (_e, dir, filenames) => {
   const found = {};
   walkDirCollecting(dir, wanted, found);
   return found;
+});
+
+// Like walkDirCollecting, but keeps EVERY match per name instead of the first.
+// The Resizer must see duplicates (collected AE projects hold copies of
+// *_9x16.mp4 files) to avoid picking one at random; Autofill keeps its own walk.
+function walkDirCollectingAll(dir, wanted, found) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { walkDirCollectingAll(full, wanted, found); continue; }
+    const key = wanted.get(entry.name.toLowerCase());
+    if (key) (found[key] = found[key] || []).push(full);
+  }
+}
+
+ipcMain.handle('find-all-files', (_e, dir, filenames) => {
+  const wanted = new Map((filenames || []).map(n => [String(n).toLowerCase(), n]));
+  const found = {};
+  walkDirCollectingAll(dir, wanted, found);
+  return found;
+});
+
+// ── Video resizer ──────────────────────────────────────────────────────
+// Makes the 1x1 / 4x5 / 16x9 (and custom) versions of a task's 9x16 master
+// with the bundled ffmpeg, one task at a time. No Airtable writes: Autofill
+// stays the way to fill the fields from the files this produces.
+
+function resizeBinary(name) {
+  return resolveBinary(name, { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
+}
+
+function existingResizeVideos(task, targets) {
+  const dir = path.dirname(task.source);
+  return targets.filter(t => fs.existsSync(path.join(dir, resizePlan.resizeOutputName(task.base, t))));
+}
+
+function notNineBySixteen(info) {
+  return resizePlan.isNineBySixteen(info.width, info.height)
+    ? null : `source is ${info.width}×${info.height}, not 9:16`;
+}
+
+// For the dialog's task list: source size, and which resizes already exist for
+// the sizes currently ticked. tasks: [{ id, base, source }].
+ipcMain.handle('resize-inspect', async (_e, tasks, keys) => {
+  const targets = resizePlan.resolveTargets(keys);
+  const ffprobe = resizeBinary('ffprobe');
+  const out = [];
+  for (const task of tasks || []) {
+    try {
+      const info = await probeVideo(ffprobe, task.source);
+      out.push({
+        id: task.id, width: info.width, height: info.height, duration: info.duration,
+        error: notNineBySixteen(info),
+        existing: existingResizeVideos(task, targets).map(t => t.key),
+      });
+    } catch (err) {
+      log(`resize-inspect: ${path.basename(task.source)} FAILED — ${err.message}`);
+      out.push({ id: task.id, error: err.message });
+    }
+  }
+  return out;
+});
+
+let activeResize = null; // { cancelled, job } while a batch runs
+
+function quoteArg(a) {
+  return /[\s'"()[\];]/.test(a) ? JSON.stringify(a) : a;
+}
+
+ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
+  if (activeResize) throw new Error('A resize is already running');
+  const targets = resizePlan.resolveTargets(keys);
+  if (!targets.length) throw new Error('No sizes chosen');
+  const ffmpeg = resizeBinary('ffmpeg');
+  const ffprobe = resizeBinary('ffprobe');
+  const send = payload => { if (!event.sender.isDestroyed()) event.sender.send('resize-progress', payload); };
+
+  // Asked once for the whole batch, about videos only; PNGs are always
+  // overwritten. "Don't render" (also Esc) cancels the whole run.
+  const existing = (tasks || []).flatMap(task =>
+    existingResizeVideos(task, targets).map(t => resizePlan.resizeOutputName(task.base, t)));
+  if (existing.length) {
+    const shown = existing.slice(0, 6).join('\n') + (existing.length > 6 ? `\n… and ${existing.length - 6} more` : '');
+    const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
+      type: 'warning',
+      message: existing.length === 1 ? 'This resized video already exists' : `${existing.length} resized videos already exist`,
+      detail: shown,
+      buttons: ['Overwrite', "Don't render"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response !== 0) {
+      log(`resize: declined to overwrite ${existing.length} existing video(s)`);
+      return { declined: true };
+    }
+  }
+
+  log(`resize: batch of ${tasks.length} task(s), sizes ${targets.map(t => t.key).join(', ')}${previews ? ' + previews' : ''}, ffmpeg=${ffmpeg}`);
+  const run = { cancelled: false, job: null };
+  activeResize = run;
+  const results = [];
+  const finish = (id, state, extra = {}) => {
+    send({ id, state, ...extra });
+    results.push({ id, state, ...extra });
+  };
+  try {
+    for (const task of tasks) {
+      if (run.cancelled) { finish(task.id, 'cancelled'); continue; }
+      const t0 = Date.now();
+      send({ id: task.id, state: 'rendering', fraction: 0 });
+      try {
+        const info = await probeVideo(ffprobe, task.source);
+        const bad = notNineBySixteen(info);
+        if (bad) throw new Error(bad);
+        if (run.cancelled) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+        const dir = path.dirname(task.source);
+        // Checked here, right before the run, not when the dialog opened.
+        const sourcePreview = !!previews && !fs.existsSync(path.join(dir, resizePlan.sourcePreviewName(task.base)));
+        const plan = resizePlan.buildResizePlan({
+          source: task.source, dir, base: task.base, info, targets, previews: !!previews, sourcePreview,
+          platform: process.platform, sep: path.sep,
+        });
+        log(`resize: ${task.base} ${info.codec} ${info.width}x${info.height} ${info.duration.toFixed(2)}s → encoders ${plan.encoders.join(', ')}`);
+        log(`resize: ffmpeg ${plan.args.map(quoteArg).join(' ')}`);
+        let lastSent = 0;
+        run.job = renderPlan(ffmpeg, plan, info.duration, fraction => {
+          const now = Date.now();
+          if (now - lastSent < 250) return;
+          lastSent = now;
+          send({ id: task.id, state: 'rendering', fraction });
+        });
+        await run.job.finished;
+        const seconds = (Date.now() - t0) / 1000;
+        log(`resize: ${task.base} done in ${seconds.toFixed(1)}s (${plan.outputs.length} file(s))`);
+        finish(task.id, 'done', { seconds, fraction: 1 });
+      } catch (err) {
+        if (err.cancelled) {
+          log(`resize: ${task.base} cancelled`);
+          finish(task.id, 'cancelled');
+        } else {
+          const tail = (err.stderr || '').trim().split('\n').slice(-8).join(' | ');
+          log(`resize: ${task.base} FAILED after ${((Date.now() - t0) / 1000).toFixed(1)}s — ${err.message}${tail ? ` — stderr: ${tail}` : ''}`);
+          finish(task.id, 'failed', { error: err.message });
+        }
+      } finally {
+        run.job = null;
+      }
+    }
+  } finally {
+    activeResize = null;
+  }
+  return { results };
+});
+
+ipcMain.handle('resize-cancel', () => {
+  if (!activeResize) return false;
+  activeResize.cancelled = true;
+  if (activeResize.job) activeResize.job.cancel();
+  log('resize: cancel requested');
+  return true;
+});
+
+// Quitting mid-render must not leave a .resizing temp (or a running ffmpeg) behind.
+app.on('before-quit', () => {
+  if (activeResize && activeResize.job) activeResize.job.kill();
 });
 
 // Finds a directory whose basename EXACTLY equals `name`, anywhere under `dir`.

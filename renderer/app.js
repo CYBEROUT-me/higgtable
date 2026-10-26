@@ -2440,6 +2440,321 @@ async function confirmAutofill() {
   }
 }
 
+// ── Video resizer ─────────────────────────────────────────────────────────
+// Makes the 1x1 / 4x5 / 16x9 (and custom) versions of each selected task's
+// <base>_9x16.mp4, next to it, with the bundled ffmpeg. Only files are written:
+// Autofill on the same selection then fills Preview and Timing as usual. The
+// look, naming and encoding live in resize-plan.js; ffmpeg runs in main.js.
+
+const resizeState = {
+  tasks: [],            // { id, name, base, source, sourceNote, info, existing, state, fraction, seconds, error }
+  selected: new Set(),  // ticked size keys
+  custom: [],           // remembered custom keys, most recent first
+  previews: true,
+  running: false,
+  cancelling: false,
+  lastRun: null,        // counts after a run, until the sizes change
+  inspectSeq: 0,
+};
+
+async function openResizeModal() {
+  if (resizeState.running) {
+    document.getElementById('resize-modal').classList.remove('hidden');
+    return;
+  }
+  if (!state.workingDirectory) {
+    alert('Set a working directory first (⚙ Settings).');
+    return;
+  }
+  // Name order, like Autofill, so the two dialogs list a selection the same way.
+  const records = state.records
+    .filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
+    .sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']));
+  if (!records.length) return;
+
+  const btn = document.getElementById('bulk-resize-btn');
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  try {
+    const sourceName = rec => `${stripAspectRatio(rec.fields['Name'])}_9x16.mp4`;
+    log(`openResizeModal: searching ${state.workingDirectory} for ${records.length} 9x16 source(s)`);
+    const [found, settings] = await Promise.all([
+      window.app.findAllFiles(state.workingDirectory, records.map(sourceName)),
+      window.app.getSettings(),
+    ]);
+    resizeState.custom = (settings.resizeCustomSizes || []).filter(k => targetFromKey(k));
+    resizeState.selected = new Set(STANDARD_RESIZE_ORDER);
+    resizeState.previews = true;
+    resizeState.lastRun = null;
+    resizeState.tasks = records.map(rec => {
+      const name = rec.fields['Name'];
+      const pick = pickResizeSource(name, found[sourceName(rec)]);
+      let sourceNote = null;
+      if (pick.error === 'missing') sourceNote = 'no _9x16.mp4';
+      if (pick.error === 'ambiguous') {
+        sourceNote = `found in ${pick.paths.length} places`;
+        log(`openResizeModal: ${name} skipped, ${sourceName(rec)} found in ${pick.paths.length} places: ${pick.paths.join(' | ')}`);
+      }
+      return {
+        id: rec.id, name, base: stripAspectRatio(name), source: pick.path || null, sourceNote,
+        info: null, existing: [], state: null, fraction: 0, seconds: null, error: null,
+      };
+    });
+    renderResizeModal();
+    document.getElementById('resize-modal').classList.remove('hidden');
+    await inspectResizeSources();
+  } catch (err) {
+    alert(`Resize failed: ${err.message}`);
+    log(`openResizeModal: FAILED — ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Resize';
+  }
+}
+
+// Probes the sources (cached in main) and checks which resizes already exist
+// for the ticked sizes. Re-run whenever the sizes change; a newer call wins.
+async function inspectResizeSources() {
+  const withSource = resizeState.tasks.filter(t => t.source);
+  if (!withSource.length) { renderResizeModal(); return; }
+  const seq = ++resizeState.inspectSeq;
+  try {
+    const results = await window.app.resizeInspect(
+      withSource.map(t => ({ id: t.id, base: t.base, source: t.source })),
+      [...resizeState.selected],
+    );
+    if (seq !== resizeState.inspectSeq) return;
+    results.forEach(r => {
+      const task = resizeState.tasks.find(t => t.id === r.id);
+      if (!task) return;
+      task.info = r.error ? null : { width: r.width, height: r.height, duration: r.duration };
+      task.sourceNote = r.error || null;
+      task.existing = r.existing || [];
+    });
+  } catch (err) {
+    log(`inspectResizeSources: FAILED — ${err.message}`);
+  }
+  renderResizeModal();
+}
+
+function resizeRunnable() {
+  return resizeState.tasks.filter(t => t.source && t.info && !t.sourceNote);
+}
+
+function resizeSelectedKeys() {
+  return resolveTargets([...resizeState.selected]).map(t => t.key);
+}
+
+function renderResizeModal() {
+  const s = resizeState;
+  const count = s.tasks.length;
+  document.getElementById('resize-title').textContent = `Resize ${count} task${count === 1 ? '' : 's'}`;
+
+  // Chips: standard sizes, remembered custom sizes, then PNG previews.
+  const chips = document.getElementById('resize-chips');
+  chips.innerHTML = '';
+  const addChip = (key, label, detail, on) => {
+    const chip = document.createElement('button');
+    chip.className = 'resize-chip' + (on ? ' on' : '');
+    chip.dataset.key = key;
+    chip.disabled = s.running;
+    chip.textContent = (on ? '✓ ' : '') + label;
+    if (detail) {
+      const small = document.createElement('small');
+      small.textContent = detail;
+      chip.appendChild(small);
+    }
+    chips.appendChild(chip);
+  };
+  STANDARD_RESIZE_ORDER.forEach(key => {
+    const { width, height } = STANDARD_RESIZE_SIZES[key];
+    addChip(key, key, `${width}×${height}`, s.selected.has(key));
+  });
+  s.custom.forEach(key => addChip(key, key.replace('x', '×'), 'custom', s.selected.has(key)));
+  addChip('png', 'PNG previews', null, s.previews);
+  ['resize-custom-w', 'resize-custom-h', 'resize-custom-add']
+    .forEach(id => { document.getElementById(id).disabled = s.running; });
+
+  // Task list.
+  const list = document.getElementById('resize-task-list');
+  list.innerHTML = '';
+  s.tasks.forEach(task => {
+    const row = document.createElement('div');
+    row.className = 'resize-row';
+
+    const name = document.createElement('span');
+    name.className = 'resize-row-name';
+    name.textContent = task.name;
+    name.title = task.source || task.name;
+
+    const src = document.createElement('span');
+    src.className = 'resize-row-source';
+    if (task.sourceNote) {
+      src.classList.add('bad');
+      src.textContent = task.sourceNote;
+    } else if (!task.info) {
+      src.textContent = 'checking…';
+    } else if (task.existing.length) {
+      src.classList.add('warn');
+      src.textContent = `found · ${task.existing.join(', ')} exist${task.existing.length === 1 ? 's' : ''}`;
+    } else {
+      src.classList.add('ok');
+      src.textContent = 'found';
+    }
+
+    const status = document.createElement('span');
+    status.className = 'resize-row-status';
+    if (task.state === 'rendering' || task.state === 'done' || task.state === 'waiting') {
+      const bar = document.createElement('span');
+      bar.className = 'resize-bar';
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.round((task.state === 'done' ? 1 : task.fraction) * 100)}%`;
+      bar.appendChild(fill);
+      status.appendChild(bar);
+    }
+    const text = document.createElement('span');
+    if (task.state === 'waiting') text.textContent = 'waiting';
+    else if (task.state === 'rendering') text.textContent = `${Math.round(task.fraction * 100)}%`;
+    else if (task.state === 'done') { text.textContent = `done ${formatSeconds(task.seconds || 0)}`; text.className = 'ok'; }
+    else if (task.state === 'failed') { text.textContent = `failed: ${task.error}`; text.title = task.error; text.className = 'bad'; }
+    else if (task.state === 'cancelled') text.textContent = 'cancelled';
+    else if (task.state === 'skipped') text.textContent = 'skipped';
+    status.appendChild(text);
+
+    row.append(name, src, status);
+    list.appendChild(row);
+  });
+
+  // Footer.
+  const keys = resizeSelectedKeys();
+  const runnable = resizeRunnable();
+  const summary = document.getElementById('resize-summary');
+  if (s.lastRun && !s.running) {
+    const r = s.lastRun;
+    summary.textContent = [`Done ${r.done}`, `skipped ${r.skipped}`, `failed ${r.failed}`]
+      .concat(r.cancelled ? [`cancelled ${r.cancelled}`] : []).join(' · ');
+  } else {
+    summary.textContent = resizeSummary(runnable.length, keys.length, s.previews);
+  }
+
+  const renderBtn = document.getElementById('resize-render-btn');
+  if (s.running) {
+    const active = s.tasks.filter(t => t.state && t.state !== 'skipped');
+    const overall = active.length
+      ? active.reduce((sum, t) => sum + (t.state === 'done' ? 1 : t.fraction || 0), 0) / active.length : 0;
+    renderBtn.textContent = s.cancelling ? 'Cancelling…' : `Cancel · ${Math.round(overall * 100)}%`;
+    renderBtn.style.setProperty('--resize-progress', `${Math.round(overall * 100)}%`);
+    renderBtn.classList.add('running');
+    renderBtn.disabled = s.cancelling;
+  } else {
+    renderBtn.textContent = 'Render';
+    renderBtn.classList.remove('running');
+    renderBtn.disabled = !runnable.length || !keys.length;
+  }
+}
+
+function toggleResizeChip(key) {
+  if (resizeState.running) return;
+  if (key === 'png') resizeState.previews = !resizeState.previews;
+  else if (resizeState.selected.has(key)) resizeState.selected.delete(key);
+  else resizeState.selected.add(key);
+  resizeState.lastRun = null;
+  renderResizeModal();
+  if (key !== 'png') inspectResizeSources();
+}
+
+async function addResizeCustomSize() {
+  const wEl = document.getElementById('resize-custom-w');
+  const hEl = document.getElementById('resize-custom-h');
+  const note = document.getElementById('resize-custom-note');
+  const target = parseCustomSize(wEl.value, hEl.value);
+  if (!target) {
+    note.textContent = 'Enter a width and height between 64 and 4096 px';
+    return;
+  }
+  // Rounded to even numbers for H.264; say so when that changed the input.
+  note.textContent = (Number(wEl.value) !== target.width || Number(hEl.value) !== target.height)
+    ? `Rounded to ${target.width}×${target.height} (H.264 needs even sizes)` : '';
+  resizeState.custom = rememberCustomSize(resizeState.custom, target.key);
+  resizeState.selected.add(target.key);
+  resizeState.lastRun = null;
+  wEl.value = '';
+  hEl.value = '';
+  renderResizeModal();
+  inspectResizeSources();
+  await window.app.saveSettings({ resizeCustomSizes: resizeState.custom });
+}
+
+async function startResize() {
+  const s = resizeState;
+  if (s.running) {
+    s.cancelling = true;
+    renderResizeModal();
+    await window.app.resizeCancel();
+    return;
+  }
+  const keys = resizeSelectedKeys();
+  const runnable = resizeRunnable();
+  if (!runnable.length || !keys.length) return;
+
+  s.tasks.forEach(t => {
+    t.state = runnable.includes(t) ? 'waiting' : 'skipped';
+    t.fraction = 0;
+    t.seconds = null;
+    t.error = null;
+  });
+  s.running = true;
+  s.cancelling = false;
+  s.lastRun = null;
+  renderResizeModal();
+  log(`startResize: ${runnable.length} task(s), sizes ${keys.join(', ')}${s.previews ? ' + previews' : ''}`);
+  try {
+    const res = await window.app.resizeRender({
+      tasks: runnable.map(t => ({ id: t.id, base: t.base, source: t.source })),
+      keys,
+      previews: s.previews,
+    });
+    if (res.declined) {
+      s.tasks.forEach(t => { t.state = null; });
+    } else {
+      const count = state => s.tasks.filter(t => t.state === state).length;
+      s.lastRun = {
+        done: count('done'), skipped: count('skipped'), failed: count('failed'), cancelled: count('cancelled'),
+      };
+      log(`startResize: finished — ${JSON.stringify(s.lastRun)}`);
+    }
+  } catch (err) {
+    alert(`Resize failed: ${err.message}`);
+    log(`startResize: FAILED — ${err.message}`);
+    s.tasks.forEach(t => { if (t.state === 'waiting' || t.state === 'rendering') t.state = null; });
+  } finally {
+    s.running = false;
+    s.cancelling = false;
+    renderResizeModal();
+    // The new files now exist: refresh the "resizes exist" notes.
+    inspectResizeSources();
+  }
+}
+
+function applyResizeProgress(p) {
+  const task = resizeState.tasks.find(t => t.id === p.id);
+  if (!task) return;
+  task.state = p.state;
+  if (p.fraction != null) task.fraction = p.fraction;
+  if (p.seconds != null) task.seconds = p.seconds;
+  if (p.error) task.error = p.error;
+  renderResizeModal();
+}
+
+function closeResizeModal() {
+  if (resizeState.running) {
+    if (!confirm('A resize is still rendering. Cancel it and close?')) return;
+    resizeState.cancelling = true;
+    window.app.resizeCancel();
+  }
+  document.getElementById('resize-modal').classList.add('hidden');
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────
 
 function showSettingsModal(forced = false) {
@@ -2526,6 +2841,23 @@ document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-autofill-btn').disabled) return;
   openAutofillModal();
 });
+document.getElementById('bulk-resize-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-resize-btn').disabled) return;
+  openResizeModal();
+});
+document.getElementById('resize-chips').addEventListener('click', e => {
+  const chip = e.target.closest('.resize-chip');
+  if (chip && !chip.disabled) toggleResizeChip(chip.dataset.key);
+});
+document.getElementById('resize-custom-add').addEventListener('click', addResizeCustomSize);
+['resize-custom-w', 'resize-custom-h'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') addResizeCustomSize();
+  });
+});
+document.getElementById('resize-render-btn').addEventListener('click', startResize);
+document.getElementById('resize-close-btn').addEventListener('click', closeResizeModal);
+window.app.onResizeProgress(applyResizeProgress);
 const taskSearchInput = document.getElementById('task-search');
 taskSearchInput.addEventListener('input', renderTaskSearchResults);
 taskSearchInput.addEventListener('focus', renderTaskSearchResults);
@@ -2647,7 +2979,9 @@ document.getElementById('field-settings-modal').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (!document.getElementById('field-settings-modal').classList.contains('hidden')) {
+  if (!document.getElementById('resize-modal').classList.contains('hidden')) {
+    closeResizeModal();
+  } else if (!document.getElementById('field-settings-modal').classList.contains('hidden')) {
     closeFieldSettings();
   } else if (!document.getElementById('record-modal').classList.contains('hidden')) {
     closeRecordModal();

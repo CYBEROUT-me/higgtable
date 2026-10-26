@@ -33,4 +33,13 @@ contextBridge.exposeInMainWorld('app', {
   openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
   copyToClipboard:   (text)        => ipcRenderer.invoke('copy-to-clipboard', text),
   normalizeImage:    (p, plan)     => ipcRenderer.invoke('normalize-image', p, plan),
+  findAllFiles:      (dir, names)  => ipcRenderer.invoke('find-all-files', dir, names),
+  resizeInspect:     (tasks, keys) => ipcRenderer.invoke('resize-inspect', tasks, keys),
+  resizeRender:      (job)         => ipcRenderer.invoke('resize-render', job),
+  resizeCancel:      ()            => ipcRenderer.invoke('resize-cancel'),
+  onResizeProgress:  (callback)    => {
+    const listener = (_e, payload) => callback(payload);
+    ipcRenderer.on('resize-progress', listener);
+    return () => ipcRenderer.removeListener('resize-progress', listener);
+  },
 });
