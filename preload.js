@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('app', {
   resizeInspect:     (tasks, keys) => ipcRenderer.invoke('resize-inspect', tasks, keys),
   resizeRender:      (job)         => ipcRenderer.invoke('resize-render', job),
   resizeCancel:      ()            => ipcRenderer.invoke('resize-cancel'),
+  compressInspect:   (tasks)       => ipcRenderer.invoke('compress-inspect', tasks),
+  compressRender:    (job)         => ipcRenderer.invoke('compress-render', job),
   onResizeProgress:  (callback)    => {
     const listener = (_e, payload) => callback(payload);
     ipcRenderer.on('resize-progress', listener);

@@ -4,7 +4,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { parseProbe, progressFromLine } = require('./renderer/resize-plan');
+const {
+  parseProbe, progressFromLine, deliveryVideoBitrate, retryVideoBitrate, buildCompressPlan,
+  isOverDeliveryLimit, formatMB, MAX_COMPRESS_ATTEMPTS,
+} = require('./renderer/resize-plan');
 
 const IS_WIN = process.platform === 'win32';
 const EXE = IS_WIN ? '.exe' : '';
@@ -69,10 +72,10 @@ function removeTemps(plan) {
   }
 }
 
-// Runs one plan. Temps are renamed over the finals only after ffmpeg exits 0;
-// on failure or cancel every temp is deleted, so no half-written delivery is
-// ever left behind.
-function renderPlan(ffmpeg, plan, duration, onProgress) {
+// Runs one plan. Temps are renamed over the finals only after ffmpeg exits 0
+// (and `beforeCommit`, if given, did not throw); on failure or cancel every temp
+// is deleted, so no half-written delivery is ever left behind.
+function renderPlan(ffmpeg, plan, duration, onProgress, { beforeCommit } = {}) {
   let buf = '';
   let cancelled = false;
   // Monotonic: ffmpeg's last progress block can report a smaller out_time (the
@@ -93,11 +96,11 @@ function renderPlan(ffmpeg, plan, duration, onProgress) {
     for (const o of plan.outputs) {
       if (!fs.existsSync(o.temp)) throw new Error(`ffmpeg did not write ${path.basename(o.final)}`);
     }
-    for (const o of plan.outputs) {
-      // rm first: renaming over an existing file fails on Windows.
-      fs.rmSync(o.final, { force: true });
-      fs.renameSync(o.temp, o.final);
-    }
+    if (beforeCommit) beforeCommit(plan);
+    // rename replaces an existing final in one step (MoveFileEx with
+    // REPLACE_EXISTING on Windows). Never delete first: for an in-place
+    // compress the final IS the original, and a crash in between would lose it.
+    for (const o of plan.outputs) fs.renameSync(o.temp, o.final);
   }).catch(err => {
     removeTemps(plan);
     throw cancelled ? Object.assign(new Error('Cancelled'), { cancelled: true }) : err;
@@ -118,4 +121,49 @@ function renderPlan(ffmpeg, plan, duration, onProgress) {
   return { finished, cancel, kill };
 }
 
-module.exports = { resolveBinary, probeVideo, renderPlan };
+// Re-encodes one video in place so it fits under the 32 MB delivery limit. The
+// first attempt uses the bitrate the duration allows; an attempt that still
+// measures over is discarded and redone lower. The original is only replaced
+// by an attempt that fits.
+function compressVideo(ffmpeg, ffprobe, file, onProgress) {
+  let current = null;
+  let cancelled = false;
+  const finished = (async () => {
+    const before = fs.statSync(file).size;
+    const info = await probeVideo(ffprobe, file);
+    let bitrate = deliveryVideoBitrate(info);
+    if (!bitrate) throw new Error('unknown duration and bitrate');
+    for (let attempt = 1; attempt <= MAX_COMPRESS_ATTEMPTS; attempt++) {
+      if (cancelled) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+      const plan = buildCompressPlan({
+        source: file, dir: path.dirname(file), name: path.basename(file), info, bitrate,
+        platform: process.platform, sep: path.sep,
+      });
+      let missed = null;
+      current = renderPlan(ffmpeg, plan, info.duration, onProgress, {
+        beforeCommit: p => {
+          const size = fs.statSync(p.outputs[0].temp).size;
+          if (isOverDeliveryLimit(size)) {
+            missed = size;
+            throw new Error(`came out at ${formatMB(size)}`);
+          }
+        },
+      });
+      try {
+        await current.finished;
+        return { before, after: fs.statSync(file).size, attempts: attempt, bitrate };
+      } catch (err) {
+        if (missed == null) throw err;
+        bitrate = retryVideoBitrate(bitrate, missed);
+      }
+    }
+    throw new Error(`still over 32 MB after ${MAX_COMPRESS_ATTEMPTS} attempts`);
+  })();
+  return {
+    finished,
+    cancel: () => { cancelled = true; if (current) current.cancel(); },
+    kill: () => { cancelled = true; if (current) current.kill(); },
+  };
+}
+
+module.exports = { resolveBinary, probeVideo, renderPlan, compressVideo };

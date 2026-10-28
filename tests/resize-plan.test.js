@@ -2,7 +2,8 @@ const {
   STANDARD_RESIZE_SIZES, evenSize, parseCustomSize, targetFromKey, resolveTargets, rememberCustomSize,
   isNineBySixteen, layerGeometry, backgroundChain, parseProbe, chooseEncoders,
   resizeOutputName, buildResizePlan, pickResizeSource, progressFromLine, resizeSummary, formatSeconds,
-  standardTarget,
+  standardTarget, MAX_DELIVERY_BYTES, isOverDeliveryLimit, deliveryVideoBitrate, retryVideoBitrate,
+  buildCompressPlan, isTaskVideoName, formatMB,
 } = require('../renderer/resize-plan');
 
 // The sources seen in the owner's folders: H.264 Main, 1080x1920, yuv420p,
@@ -132,7 +133,7 @@ describe('parseProbe', () => {
   };
 
   test('reads the fields the plan needs', () => {
-    expect(parseProbe(probe)).toEqual(SOURCE_INFO);
+    expect(parseProbe(probe)).toEqual({ ...SOURCE_INFO, audioBitrate: 188795 });
   });
 
   test('a ±90° rotation swaps width and height', () => {
@@ -345,5 +346,97 @@ describe('progress and text', () => {
   test('formatSeconds', () => {
     expect(formatSeconds(1.64)).toBe('1.6s');
     expect(formatSeconds(75)).toBe('1m 15s');
+  });
+});
+
+// The TLN_3536 renders that prompted this: 18.17 s at ~14.2 Mbps came out at
+// 32.7 MB, just over the 32 MB delivery limit.
+describe('32 MB delivery limit', () => {
+  const TLN = { ...SOURCE_INFO, videoBitrate: 14176370, duration: 18.166667, audioBitrate: 189132 };
+
+  test('the limit is 32,000,000 bytes, as Finder counts', () => {
+    expect(MAX_DELIVERY_BYTES).toBe(32000000);
+    expect(isOverDeliveryLimit(32716005)).toBe(true);
+    expect(isOverDeliveryLimit(32000000)).toBe(false);
+  });
+
+  test('a clip that would land over the limit is capped to fit, with a margin', () => {
+    const b = deliveryVideoBitrate(TLN);
+    expect(b).toBeLessThan(TLN.videoBitrate);
+    const bytes = (b + TLN.audioBitrate) * TLN.duration / 8;
+    // Aimed 8% under, leaving room for x264's ~4% overshoot.
+    expect(bytes).toBeLessThan(MAX_DELIVERY_BYTES * 0.93);
+    expect(bytes).toBeGreaterThan(MAX_DELIVERY_BYTES * 0.91);
+  });
+
+  test('a short clip keeps the source bitrate (no point adding size)', () => {
+    expect(deliveryVideoBitrate(SOURCE_INFO)).toBe(12804800);
+  });
+
+  test('a long clip gets a proportionally lower bitrate', () => {
+    expect(deliveryVideoBitrate({ ...TLN, duration: 60 })).toBeLessThan(4200000);
+  });
+
+  test('unknown audio bitrate is assumed high, re-encoded audio counts as 192k', () => {
+    const unknown = deliveryVideoBitrate({ ...TLN, audioBitrate: null });
+    const recoded = deliveryVideoBitrate({ ...TLN, audioCodec: 'pcm_s16le' });
+    expect(unknown).toBeLessThan(deliveryVideoBitrate(TLN));
+    expect(recoded).toBeGreaterThan(unknown);
+  });
+
+  test('resizes are encoded at the capped bitrate', () => {
+    const p = buildResizePlan({
+      source: '/w/X_9x16.mp4', dir: '/w', base: 'X', info: TLN, targets: [standardTarget('1x1')],
+      previews: false, sourcePreview: false, platform: 'darwin', sep: '/',
+    });
+    expect(p.args[p.args.indexOf('-b:v') + 1]).toBe(String(deliveryVideoBitrate(TLN)));
+  });
+
+  test('a retry scales the bitrate down by how far the attempt missed', () => {
+    const next = retryVideoBitrate(10000000, 33000000);
+    expect(next).toBeLessThan(10000000 * (32000000 * 0.92) / 33000000);
+    expect(next).toBeGreaterThan(8500000);
+  });
+
+  test('formatMB matches Finder', () => expect(formatMB(32716005)).toBe('32.7 MB'));
+});
+
+describe('buildCompressPlan', () => {
+  const plan = (over = {}) => buildCompressPlan({
+    source: '/w/X_9x16.mp4', dir: '/w', name: 'X_9x16.mp4', info: SOURCE_INFO, bitrate: 11000000,
+    platform: 'darwin', sep: '/', ...over,
+  });
+
+  test('re-encodes in software at the given bitrate, keeping everything else', () => {
+    const p = plan();
+    expect(p.encoder).toBe('libx264');
+    expect(p.args.slice(p.args.indexOf('-i'))).toEqual([
+      '-i', '/w/X_9x16.mp4', '-map', '0:v:0', '-map', '0:a?', '-c:a', 'copy',
+      '-c:v', 'libx264', '-preset', 'medium', '-profile:v', 'main', '-level:v', '4.1',
+      '-pix_fmt', 'yuv420p', '-b:v', '11000000',
+      '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_range', 'tv',
+      '-map_metadata', '0', '-fps_mode', 'passthrough', '-movflags', '+faststart', '-f', 'mp4',
+      '/w/.X_9x16.mp4.compressing',
+    ]);
+    expect(p.outputs).toEqual([{ temp: '/w/.X_9x16.mp4.compressing', final: '/w/X_9x16.mp4', isPreview: false }]);
+  });
+
+  test('HEVC stays HEVC, in software even on macOS', () => {
+    const p = plan({ info: { ...SOURCE_INFO, codec: 'hevc', profile: 'Main' } });
+    expect(p.encoder).toBe('libx265');
+  });
+});
+
+describe('isTaskVideoName', () => {
+  const base = 'TLN_3536_3535_M54_S1891_EN_usr_LAV_PRI_Video_VAR_Mix';
+  test.each([
+    [`${base}_9x16.mp4`, true], [`${base}_1x1.MP4`, true], [`${base}_1200x628.mp4`, true],
+    [`${base}_1.91x1.mp4`, true], [`${base}_9x16_1.mp4`, false], [`${base}_9x16.png`, false],
+    ['TLN_3537_X_9x16.mp4', false],
+  ])('%s → %s', (name, want) => expect(isTaskVideoName(base, name)).toBe(want));
+
+  test('regex characters in the base are literal', () => {
+    expect(isTaskVideoName('A.B(1)', 'A.B(1)_1x1.mp4')).toBe(true);
+    expect(isTaskVideoName('A.B(1)', 'AxB(1)_1x1.mp4')).toBe(false);
   });
 });

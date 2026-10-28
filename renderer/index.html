@@ -93,6 +93,7 @@
     <button id="bulk-mark-inwork-btn" title="Move the selected tasks back to the In work status">Mark as In Work</button>
     <button id="bulk-autofill-btn" title="Search the working directory for matching preview images and 9x16 videos, and fill in Preview + Timing for the selected tasks">Autofill</button>
     <button id="bulk-resize-btn" title="Make the 1x1, 4x5 and 16x9 versions (and custom sizes) of each selected task's _9x16.mp4, next to it">Resize</button>
+    <button id="bulk-compress-btn" title="Shrink every video of the selected tasks that is over 32 MB, in place (the 9x16 master and its resizes)">Compress</button>
     <button id="bulk-copy-name-btn" title="Copy the selected task name(s) to the clipboard">⧉ Copy name</button>
     <button id="bulk-clear-btn">Clear selection</button>
   </div>
@@ -215,17 +216,19 @@
   <div id="resize-modal" class="modal-overlay hidden">
     <div class="modal-box resize-box">
       <h2 id="resize-title">Resize</h2>
-      <p>Sizes for this batch</p>
-      <div id="resize-chips"></div>
-      <div id="resize-custom-row">
-        <span>Custom size</span>
-        <input type="number" id="resize-custom-w" min="64" max="4096" step="2" placeholder="W">
-        <span>×</span>
-        <input type="number" id="resize-custom-h" min="64" max="4096" step="2" placeholder="H">
-        <button id="resize-custom-add">Add</button>
-        <span id="resize-custom-note"></span>
+      <div id="resize-sizes-section">
+        <p>Sizes for this batch</p>
+        <div id="resize-chips"></div>
+        <div id="resize-custom-row">
+          <span>Custom size</span>
+          <input type="number" id="resize-custom-w" min="64" max="4096" step="2" placeholder="W">
+          <span>×</span>
+          <input type="number" id="resize-custom-h" min="64" max="4096" step="2" placeholder="H">
+          <button id="resize-custom-add">Add</button>
+          <span id="resize-custom-note"></span>
+        </div>
       </div>
-      <div class="resize-row resize-row-head"><span>Task</span><span>9x16 source</span><span>Status</span></div>
+      <div class="resize-row resize-row-head"><span>Task</span><span id="resize-col-source">9x16 source</span><span>Status</span></div>
       <div id="resize-task-list"></div>
       <div class="modal-actions resize-footer">
         <span id="resize-summary"></span>

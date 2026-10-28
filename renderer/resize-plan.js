@@ -38,6 +38,15 @@ const VIGNETTE_ANGLE = 'PI/4.5';
 // Audio codecs the MP4 muxer takes as-is. Anything else is re-encoded to AAC
 // instead of failing the whole render.
 const MP4_COPYABLE_AUDIO = ['aac', 'mp3', 'ac3', 'eac3', 'alac'];
+const RECODED_AUDIO_BITRATE = 192000;
+
+// Every delivered video must be under 32 MB, counted the way Finder counts
+// (32,000,000 bytes, which is also under 32 MiB). Encoders aim 8% below it:
+// single-pass x264 overshoots its bitrate by ~4% (TLN_3536's 4x5 came out at
+// 31.99 MB aiming at 96%), and Finder shows 31.99 MB as "32 MB".
+const MAX_DELIVERY_BYTES = 32000000;
+const DELIVERY_TARGET_FRACTION = 0.92;
+const MAX_COMPRESS_ATTEMPTS = 3;
 
 // H.264 levels VideoToolbox accepts.
 const VIDEOTOOLBOX_LEVELS = [30, 31, 32, 40, 41, 42, 50, 51, 52];
@@ -176,6 +185,7 @@ function parseProbe(json) {
     duration: Number(format.duration || v.duration || 0),
     hasAudio: audio.length > 0,
     audioCodec: audio.length ? audio[0].codec_name : null,
+    audioBitrate: audio.reduce((sum, s) => sum + Number(s.bit_rate || 0), 0) || null,
     colorRange: known(v.color_range),
     colorSpace: known(v.color_space),
     colorTransfer: known(v.color_transfer),
@@ -203,13 +213,15 @@ function h264Profile(profile, pixFmt) {
 
 // The software (or, for HEVC on macOS, VideoToolbox) encoder that matches the
 // source, in the guide's "speed" mode. The container is always MP4, so codecs
-// other than H.264 and HEVC become H.264.
-function baseEncoder(info, platform) {
+// other than H.264 and HEVC become H.264. `compress` asks for software only and
+// a slower preset: it is squeezing a file under a size limit, where every bit
+// counts and VideoToolbox misses its bitrate.
+function baseEncoder(info, platform, compress = false) {
   const pix = info.pixFmt || 'yuv420p';
   if (info.codec === 'hevc') {
     const ten = /10|12/.test(pix);
     const is420 = pix.includes('420') || pix === 'nv12' || pix === 'p010le';
-    if (platform === 'darwin' && is420) {
+    if (platform === 'darwin' && is420 && !compress) {
       return {
         name: 'hevc_videotoolbox',
         args: ['-c:v', 'hevc_videotoolbox', '-profile:v', ten ? 'main10' : 'main', '-tag:v', 'hvc1'],
@@ -220,13 +232,13 @@ function baseEncoder(info, platform) {
     const f = x26xPixFmt(pix);
     return {
       name: 'libx265',
-      args: ['-c:v', 'libx265', '-preset', 'fast', '-tag:v', 'hvc1', '-x265-params', 'log-level=error'],
+      args: ['-c:v', 'libx265', '-preset', compress ? 'medium' : 'fast', '-tag:v', 'hvc1', '-x265-params', 'log-level=error'],
       pixFmt: f.pixFmt,
       colorRange: f.colorRange || null,
     };
   }
   const f = x26xPixFmt(info.codec === 'h264' ? pix : 'yuv420p');
-  const args = ['-c:v', 'libx264', '-preset', 'veryfast'];
+  const args = ['-c:v', 'libx264', '-preset', compress ? 'medium' : 'veryfast'];
   if (info.codec === 'h264') {
     const p = h264Profile(info.profile, f.pixFmt);
     if (p) args.push('-profile:v', p);
@@ -239,10 +251,10 @@ function baseEncoder(info, platform) {
 // the rest to libx264, so the CPU and the hardware encoder work in parallel
 // (the guide measured 3.1 s against 4.1 s all-x264). Windows has no
 // VideoToolbox, so everything stays in software there.
-function chooseEncoders(info, targets, platform) {
-  const base = baseEncoder(info, platform);
+function chooseEncoders(info, targets, platform, compress = false) {
+  const base = baseEncoder(info, platform, compress);
   const areas = targets.map(t => t.width * t.height);
-  const hybrid = platform === 'darwin' && info.codec === 'h264' && base.name === 'libx264'
+  const hybrid = !compress && platform === 'darwin' && info.codec === 'h264' && base.name === 'libx264'
     && base.pixFmt === 'yuv420p' && !base.colorRange && targets.length >= 2;
   const hwIndex = hybrid ? areas.indexOf(Math.max(...areas)) : -1;
   const srcArea = (info.width || 0) * (info.height || 0);
@@ -334,6 +346,8 @@ function buildResizePlan(opts) {
   };
 
   const copyAudio = MP4_COPYABLE_AUDIO.includes(info.audioCodec);
+  // Source bitrate, capped so every output fits under the 32 MB limit.
+  const bitrate = deliveryVideoBitrate(info);
   targets.forEach((t, i) => {
     const enc = encoders[i];
     const finalName = resizeOutputName(base, t);
@@ -341,13 +355,8 @@ function buildResizePlan(opts) {
     args.push('-map', `[v${i}]`);
     if (info.hasAudio) args.push('-map', '0:a?', ...(copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k']));
     args.push(...enc.args);
-    if (info.videoBitrate) args.push('-b:v', String(Math.trunc(info.videoBitrate)));
-    if (info.colorPrimaries) args.push('-color_primaries', info.colorPrimaries);
-    if (info.colorTransfer) args.push('-color_trc', info.colorTransfer);
-    if (info.colorSpace) args.push('-colorspace', info.colorSpace);
-    const range = enc.colorRange || info.colorRange;
-    if (range) args.push('-color_range', range);
-    args.push('-map_metadata', '0', '-fps_mode', 'passthrough', '-movflags', '+faststart', '-f', 'mp4', temp);
+    if (bitrate) args.push('-b:v', String(bitrate));
+    args.push(...videoOutputTail(info, enc), temp);
     outputs.push({ temp, final: joinPath(dir, finalName, sep), isPreview: false, key: t.key });
     if (previews) addPreview(`p${i}`, resizeOutputName(base, t, 'png'));
   });
@@ -359,6 +368,78 @@ function buildResizePlan(opts) {
     videos: outputs.filter(o => !o.isPreview).map(o => o.final),
     encoders: encoders.map(e => e.name),
   };
+}
+
+// Colour tags, timing and container flags shared by every video output.
+function videoOutputTail(info, enc) {
+  const args = [];
+  if (info.colorPrimaries) args.push('-color_primaries', info.colorPrimaries);
+  if (info.colorTransfer) args.push('-color_trc', info.colorTransfer);
+  if (info.colorSpace) args.push('-colorspace', info.colorSpace);
+  const range = enc.colorRange || info.colorRange;
+  if (range) args.push('-color_range', range);
+  args.push('-map_metadata', '0', '-fps_mode', 'passthrough', '-movflags', '+faststart', '-f', 'mp4');
+  return args;
+}
+
+// ── Size limit ────────────────────────────────────────────────────────────
+
+function isOverDeliveryLimit(bytes) {
+  return bytes > MAX_DELIVERY_BYTES;
+}
+
+function audioBitrateFor(info) {
+  if (!info.hasAudio) return 0;
+  if (!MP4_COPYABLE_AUDIO.includes(info.audioCodec)) return RECODED_AUDIO_BITRATE;
+  // Copied as-is; an unknown rate is assumed high so the video budget errs low.
+  return info.audioBitrate || 320000;
+}
+
+// The video bitrate that keeps a file of this duration under the limit, never
+// above the source's own bitrate (which would only add size, not quality).
+// Returns null when neither is known.
+function deliveryVideoBitrate(info) {
+  const source = info.videoBitrate ? Math.trunc(info.videoBitrate) : null;
+  if (!(info.duration > 0)) return source;
+  const budget = Math.trunc(MAX_DELIVERY_BYTES * DELIVERY_TARGET_FRACTION * 8 / info.duration - audioBitrateFor(info));
+  const capped = Math.max(100000, budget);
+  return source ? Math.min(source, capped) : capped;
+}
+
+// After an attempt came out at `actualBytes`, the bitrate for the next one:
+// scaled down by how far it missed the target, plus 2% more so a second miss
+// is unlikely.
+function retryVideoBitrate(bitrate, actualBytes) {
+  const target = MAX_DELIVERY_BYTES * DELIVERY_TARGET_FRACTION;
+  return Math.max(100000, Math.trunc(bitrate * (target / actualBytes) * 0.98));
+}
+
+// Re-encodes one video in place at `bitrate`: same resolution, frame timing,
+// colour tags and codec family; audio copied. Writes a hidden temp next to it;
+// the caller swaps it in only once it measures under the limit.
+// opts: { source, dir, name, info, bitrate, platform, sep }
+function buildCompressPlan(opts) {
+  const { source, dir, name, info, bitrate, platform } = opts;
+  const sep = opts.sep || '/';
+  const [enc] = chooseEncoders(info, [{ key: 'compress', width: info.width, height: info.height, custom: true }], platform, true);
+  const temp = joinPath(dir, `.${name}.compressing`, sep);
+  const copyAudio = MP4_COPYABLE_AUDIO.includes(info.audioCodec);
+  const args = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats',
+    '-i', source, '-map', '0:v:0'];
+  if (info.hasAudio) args.push('-map', '0:a?', ...(copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k']));
+  args.push(...enc.args, '-pix_fmt', enc.pixFmt, '-b:v', String(bitrate), ...videoOutputTail(info, enc), temp);
+  return { args, outputs: [{ temp, final: joinPath(dir, name, sep), isPreview: false }], encoder: enc.name };
+}
+
+// A task's delivered videos: "<base>_<ratio or WxH>.mp4", e.g. _9x16, _1x1,
+// _1.91x1, _1200x628. A repeat render such as "_9x16_1.mp4" is not one.
+function isTaskVideoName(base, filename) {
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}_\\d+(?:\\.\\d+)?x\\d+\\.mp4$`, 'i').test(filename);
+}
+
+function formatMB(bytes) {
+  return `${(bytes / 1e6).toFixed(1)} MB`;
 }
 
 // ── Sources ───────────────────────────────────────────────────────────────
@@ -403,6 +484,11 @@ function resizeSummary(taskCount, sizeCount, previews) {
   return `${plural(taskCount, 'task')} × ${plural(sizeCount, 'size')}${previews ? ' + previews' : ''} → next to each source`;
 }
 
+function compressSummary(taskCount, videoCount) {
+  if (!taskCount) return 'Nothing over 32 MB';
+  return `${plural(taskCount, 'task')} · ${plural(videoCount, 'video')} over 32 MB → compressed in place`;
+}
+
 function formatSeconds(s) {
   return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
 }
@@ -410,9 +496,11 @@ function formatSeconds(s) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     STANDARD_RESIZE_SIZES, STANDARD_RESIZE_ORDER, MAX_REMEMBERED_CUSTOM_SIZES, MP4_COPYABLE_AUDIO,
+    MAX_DELIVERY_BYTES, DELIVERY_TARGET_FRACTION, MAX_COMPRESS_ATTEMPTS,
+    isOverDeliveryLimit, deliveryVideoBitrate, retryVideoBitrate, buildCompressPlan, isTaskVideoName, formatMB,
     evenSize, standardTarget, parseCustomSize, targetFromKey, resolveTargets, rememberCustomSize,
     isNineBySixteen, layerGeometry, backgroundChain, parseProbe, chooseEncoders,
     resizeOutputName, sourcePreviewName, buildResizePlan, pickResizeSource, progressFromLine,
-    resizeSummary, formatSeconds,
+    resizeSummary, compressSummary, formatSeconds,
   };
 }

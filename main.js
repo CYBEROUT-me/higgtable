@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
-const { resolveBinary, probeVideo, renderPlan } = require('./resizer');
+const { resolveBinary, probeVideo, renderPlan, compressVideo } = require('./resizer');
 const resizePlan = require('./renderer/resize-plan');
 
 // GitHub repo hosting releases — used for update checks below.
@@ -479,7 +479,57 @@ ipcMain.handle('resize-inspect', async (_e, tasks, keys) => {
   return out;
 });
 
-let activeResize = null; // { cancelled, job } while a batch runs
+let activeResize = null; // { cancelled, job } while a Resize or Compress batch runs
+
+// A task's delivered videos next to its 9x16 master (the master included).
+function listTaskVideos(task) {
+  const dir = path.dirname(task.source);
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names
+    .filter(name => resizePlan.isTaskVideoName(task.base, name))
+    .sort()
+    .map(name => {
+      const full = path.join(dir, name);
+      return { name, path: full, bytes: fs.statSync(full).size };
+    });
+}
+
+// "<base>_1x1.mp4" → "1x1", for progress and log lines.
+function videoLabel(task, file) {
+  return path.basename(file).slice(task.base.length + 1).replace(/\.mp4$/i, '');
+}
+
+// Compresses, one after another, every file of `files` that is over the 32 MB
+// limit. Returns what was compressed; a failure fails the task.
+async function compressOverLimit(run, task, files, send, ffmpeg, ffprobe) {
+  const over = files.filter(f => fs.existsSync(f) && resizePlan.isOverDeliveryLimit(fs.statSync(f).size));
+  const compressed = [];
+  for (const [i, file] of over.entries()) {
+    if (run.cancelled) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+    const label = videoLabel(task, file);
+    send({ id: task.id, state: 'compressing', label, fraction: i / over.length });
+    let lastSent = 0;
+    run.job = compressVideo(ffmpeg, ffprobe, file, fraction => {
+      const now = Date.now();
+      if (now - lastSent < 250) return;
+      lastSent = now;
+      send({ id: task.id, state: 'compressing', label, fraction: (i + fraction) / over.length });
+    });
+    try {
+      const r = await run.job.finished;
+      log(`compress: ${path.basename(file)} ${resizePlan.formatMB(r.before)} → ${resizePlan.formatMB(r.after)}`
+        + ` at ${(r.bitrate / 1e6).toFixed(2)} Mbps${r.attempts > 1 ? ` (${r.attempts} attempts)` : ''}`);
+      compressed.push({ label, before: r.before, after: r.after });
+    } catch (err) {
+      if (!err.cancelled) err.message = `${label}: ${err.message}`;
+      throw err;
+    } finally {
+      run.job = null;
+    }
+  }
+  return compressed;
+}
 
 function quoteArg(a) {
   return /[\s'"()[\];]/.test(a) ? JSON.stringify(a) : a;
@@ -548,9 +598,15 @@ ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
           send({ id: task.id, state: 'rendering', fraction });
         });
         await run.job.finished;
+        run.job = null;
+        log(`resize: ${task.base} rendered in ${((Date.now() - t0) / 1000).toFixed(1)}s (${plan.outputs.length} file(s))`);
+        // The resizes are encoded under the limit already; this catches an
+        // encoder overshoot, and the master itself (compressed only now, after
+        // the resizes were made from it at full quality).
+        const compressed = await compressOverLimit(run, task, [...plan.videos, task.source], send, ffmpeg, ffprobe);
         const seconds = (Date.now() - t0) / 1000;
-        log(`resize: ${task.base} done in ${seconds.toFixed(1)}s (${plan.outputs.length} file(s))`);
-        finish(task.id, 'done', { seconds, fraction: 1 });
+        log(`resize: ${task.base} done in ${seconds.toFixed(1)}s`);
+        finish(task.id, 'done', { seconds, fraction: 1, compressed });
       } catch (err) {
         if (err.cancelled) {
           log(`resize: ${task.base} cancelled`);
@@ -562,6 +618,56 @@ ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
         }
       } finally {
         run.job = null;
+      }
+    }
+  } finally {
+    activeResize = null;
+  }
+  return { results };
+});
+
+// For the Compress dialog: each task's videos and which are over the limit.
+// tasks: [{ id, base, source }].
+ipcMain.handle('compress-inspect', (_e, tasks) => (tasks || []).map(task => {
+  const videos = listTaskVideos(task);
+  return {
+    id: task.id,
+    count: videos.length,
+    over: videos.filter(v => resizePlan.isOverDeliveryLimit(v.bytes)).map(v => ({ label: videoLabel(task, v.name), bytes: v.bytes })),
+  };
+}));
+
+ipcMain.handle('compress-render', async (event, { tasks }) => {
+  if (activeResize) throw new Error('A resize or compress is already running');
+  const ffmpeg = resizeBinary('ffmpeg');
+  const ffprobe = resizeBinary('ffprobe');
+  const send = payload => { if (!event.sender.isDestroyed()) event.sender.send('resize-progress', payload); };
+  log(`compress: batch of ${tasks.length} task(s), ffmpeg=${ffmpeg}`);
+  const run = { cancelled: false, job: null };
+  activeResize = run;
+  const results = [];
+  const finish = (id, state, extra = {}) => {
+    send({ id, state, ...extra });
+    results.push({ id, state, ...extra });
+  };
+  try {
+    for (const task of tasks) {
+      if (run.cancelled) { finish(task.id, 'cancelled'); continue; }
+      const t0 = Date.now();
+      try {
+        const compressed = await compressOverLimit(run, task, listTaskVideos(task).map(v => v.path), send, ffmpeg, ffprobe);
+        const seconds = (Date.now() - t0) / 1000;
+        log(`compress: ${task.base} done in ${seconds.toFixed(1)}s, ${compressed.length} file(s)`);
+        finish(task.id, 'done', { seconds, fraction: 1, compressed });
+      } catch (err) {
+        if (err.cancelled) {
+          log(`compress: ${task.base} cancelled`);
+          finish(task.id, 'cancelled');
+        } else {
+          const tail = (err.stderr || '').trim().split('\n').slice(-8).join(' | ');
+          log(`compress: ${task.base} FAILED — ${err.message}${tail ? ` — stderr: ${tail}` : ''}`);
+          finish(task.id, 'failed', { error: err.message });
+        }
       }
     }
   } finally {

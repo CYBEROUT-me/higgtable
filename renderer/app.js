@@ -2445,9 +2445,15 @@ async function confirmAutofill() {
 // <base>_9x16.mp4, next to it, with the bundled ffmpeg. Only files are written:
 // Autofill on the same selection then fills Preview and Timing as usual. The
 // look, naming and encoding live in resize-plan.js; ffmpeg runs in main.js.
+//
+// The same dialog, in "compress" mode, backs the Compress button: it shrinks
+// every video of the selected tasks that is over the 32 MB delivery limit, in
+// place. Resize itself encodes under the limit and compresses the master after.
 
 const resizeState = {
-  tasks: [],            // { id, name, base, source, sourceNote, info, existing, state, fraction, seconds, error }
+  mode: 'resize',       // 'resize' | 'compress'
+  tasks: [],            // { id, name, base, source, sourceNote, info, existing, over, videoCount,
+                        //   state, label, fraction, seconds, error, compressed }
   selected: new Set(),  // ticked size keys
   custom: [],           // remembered custom keys, most recent first
   previews: true,
@@ -2457,7 +2463,7 @@ const resizeState = {
   inspectSeq: 0,
 };
 
-async function openResizeModal() {
+async function openResizeModal(mode = 'resize') {
   if (resizeState.running) {
     document.getElementById('resize-modal').classList.remove('hidden');
     return;
@@ -2472,7 +2478,8 @@ async function openResizeModal() {
     .sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']));
   if (!records.length) return;
 
-  const btn = document.getElementById('bulk-resize-btn');
+  const btn = document.getElementById(mode === 'compress' ? 'bulk-compress-btn' : 'bulk-resize-btn');
+  const btnLabel = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Searching...';
   try {
@@ -2486,6 +2493,7 @@ async function openResizeModal() {
     resizeState.selected = new Set(STANDARD_RESIZE_ORDER);
     resizeState.previews = true;
     resizeState.lastRun = null;
+    resizeState.mode = mode;
     resizeState.tasks = records.map(rec => {
       const name = rec.fields['Name'];
       const pick = pickResizeSource(name, found[sourceName(rec)]);
@@ -2497,19 +2505,44 @@ async function openResizeModal() {
       }
       return {
         id: rec.id, name, base: stripAspectRatio(name), source: pick.path || null, sourceNote,
-        info: null, existing: [], state: null, fraction: 0, seconds: null, error: null,
+        info: null, existing: [], over: null, videoCount: 0,
+        state: null, label: null, fraction: 0, seconds: null, error: null, compressed: null,
       };
     });
     renderResizeModal();
     document.getElementById('resize-modal').classList.remove('hidden');
-    await inspectResizeSources();
+    await inspectResizeTasks();
   } catch (err) {
-    alert(`Resize failed: ${err.message}`);
-    log(`openResizeModal: FAILED — ${err.message}`);
+    alert(`${mode === 'compress' ? 'Compress' : 'Resize'} failed: ${err.message}`);
+    log(`openResizeModal(${mode}): FAILED — ${err.message}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Resize';
+    btn.textContent = btnLabel;
   }
+}
+
+function inspectResizeTasks() {
+  return resizeState.mode === 'compress' ? inspectCompressTasks() : inspectResizeSources();
+}
+
+// Lists each task's videos (the 9x16 master and its resizes) and which are over
+// the 32 MB limit.
+async function inspectCompressTasks() {
+  const withSource = resizeState.tasks.filter(t => t.source);
+  if (!withSource.length) { renderResizeModal(); return; }
+  try {
+    const results = await window.app.compressInspect(
+      withSource.map(t => ({ id: t.id, base: t.base, source: t.source })));
+    results.forEach(r => {
+      const task = resizeState.tasks.find(t => t.id === r.id);
+      if (!task) return;
+      task.videoCount = r.count;
+      task.over = r.over;
+    });
+  } catch (err) {
+    log(`inspectCompressTasks: FAILED — ${err.message}`);
+  }
+  renderResizeModal();
 }
 
 // Probes the sources (cached in main) and checks which resizes already exist
@@ -2538,7 +2571,19 @@ async function inspectResizeSources() {
 }
 
 function resizeRunnable() {
+  if (resizeState.mode === 'compress') {
+    return resizeState.tasks.filter(t => t.source && !t.sourceNote && t.over && t.over.length);
+  }
   return resizeState.tasks.filter(t => t.source && t.info && !t.sourceNote);
+}
+
+// "2 compressed", with the before/after sizes for the tooltip.
+function describeCompressed(list) {
+  if (!list || !list.length) return { text: '', title: '' };
+  return {
+    text: ` · ${list.length} compressed`,
+    title: list.map(c => `${c.label}: ${formatMB(c.before)} → ${formatMB(c.after)}`).join('\n'),
+  };
 }
 
 function resizeSelectedKeys() {
@@ -2548,7 +2593,11 @@ function resizeSelectedKeys() {
 function renderResizeModal() {
   const s = resizeState;
   const count = s.tasks.length;
-  document.getElementById('resize-title').textContent = `Resize ${count} task${count === 1 ? '' : 's'}`;
+  const compress = s.mode === 'compress';
+  document.getElementById('resize-title').textContent =
+    `${compress ? 'Compress' : 'Resize'} ${count} task${count === 1 ? '' : 's'}`;
+  document.getElementById('resize-sizes-section').classList.toggle('hidden', compress);
+  document.getElementById('resize-col-source').textContent = compress ? 'Videos' : '9x16 source';
 
   // Chips: standard sizes, remembered custom sizes, then PNG previews.
   const chips = document.getElementById('resize-chips');
@@ -2592,6 +2641,18 @@ function renderResizeModal() {
     if (task.sourceNote) {
       src.classList.add('bad');
       src.textContent = task.sourceNote;
+    } else if (compress) {
+      if (!task.over) {
+        src.textContent = 'checking…';
+      } else if (!task.over.length) {
+        src.classList.add('ok');
+        src.textContent = `all ${task.videoCount} under 32 MB`;
+      } else {
+        src.classList.add('warn');
+        const max = Math.max(...task.over.map(v => v.bytes));
+        src.textContent = `${task.over.length} of ${task.videoCount} over · max ${formatMB(max)}`;
+        src.title = task.over.map(v => `${v.label}: ${formatMB(v.bytes)}`).join('\n');
+      }
     } else if (!task.info) {
       src.textContent = 'checking…';
     } else if (task.existing.length) {
@@ -2604,7 +2665,7 @@ function renderResizeModal() {
 
     const status = document.createElement('span');
     status.className = 'resize-row-status';
-    if (task.state === 'rendering' || task.state === 'done' || task.state === 'waiting') {
+    if (['rendering', 'compressing', 'done', 'waiting'].includes(task.state)) {
       const bar = document.createElement('span');
       bar.className = 'resize-bar';
       const fill = document.createElement('i');
@@ -2615,7 +2676,13 @@ function renderResizeModal() {
     const text = document.createElement('span');
     if (task.state === 'waiting') text.textContent = 'waiting';
     else if (task.state === 'rendering') text.textContent = `${Math.round(task.fraction * 100)}%`;
-    else if (task.state === 'done') { text.textContent = `done ${formatSeconds(task.seconds || 0)}`; text.className = 'ok'; }
+    else if (task.state === 'compressing') text.textContent = `compressing ${task.label} ${Math.round(task.fraction * 100)}%`;
+    else if (task.state === 'done') {
+      const c = describeCompressed(task.compressed);
+      text.textContent = `done ${formatSeconds(task.seconds || 0)}${c.text}`;
+      text.title = c.title;
+      text.className = 'ok';
+    }
     else if (task.state === 'failed') { text.textContent = `failed: ${task.error}`; text.title = task.error; text.className = 'bad'; }
     else if (task.state === 'cancelled') text.textContent = 'cancelled';
     else if (task.state === 'skipped') text.textContent = 'skipped';
@@ -2634,7 +2701,9 @@ function renderResizeModal() {
     summary.textContent = [`Done ${r.done}`, `skipped ${r.skipped}`, `failed ${r.failed}`]
       .concat(r.cancelled ? [`cancelled ${r.cancelled}`] : []).join(' · ');
   } else {
-    summary.textContent = resizeSummary(runnable.length, keys.length, s.previews);
+    summary.textContent = compress
+      ? compressSummary(runnable.length, runnable.reduce((n, t) => n + t.over.length, 0))
+      : resizeSummary(runnable.length, keys.length, s.previews);
   }
 
   const renderBtn = document.getElementById('resize-render-btn');
@@ -2647,9 +2716,9 @@ function renderResizeModal() {
     renderBtn.classList.add('running');
     renderBtn.disabled = s.cancelling;
   } else {
-    renderBtn.textContent = 'Render';
+    renderBtn.textContent = compress ? 'Compress' : 'Render';
     renderBtn.classList.remove('running');
-    renderBtn.disabled = !runnable.length || !keys.length;
+    renderBtn.disabled = !runnable.length || (!compress && !keys.length);
   }
 }
 
@@ -2693,27 +2762,30 @@ async function startResize() {
     await window.app.resizeCancel();
     return;
   }
+  const compress = s.mode === 'compress';
   const keys = resizeSelectedKeys();
   const runnable = resizeRunnable();
-  if (!runnable.length || !keys.length) return;
+  if (!runnable.length || (!compress && !keys.length)) return;
 
   s.tasks.forEach(t => {
     t.state = runnable.includes(t) ? 'waiting' : 'skipped';
     t.fraction = 0;
     t.seconds = null;
     t.error = null;
+    t.compressed = null;
   });
   s.running = true;
   s.cancelling = false;
   s.lastRun = null;
   renderResizeModal();
-  log(`startResize: ${runnable.length} task(s), sizes ${keys.join(', ')}${s.previews ? ' + previews' : ''}`);
+  log(compress
+    ? `startResize: compress ${runnable.length} task(s)`
+    : `startResize: ${runnable.length} task(s), sizes ${keys.join(', ')}${s.previews ? ' + previews' : ''}`);
   try {
-    const res = await window.app.resizeRender({
-      tasks: runnable.map(t => ({ id: t.id, base: t.base, source: t.source })),
-      keys,
-      previews: s.previews,
-    });
+    const tasks = runnable.map(t => ({ id: t.id, base: t.base, source: t.source }));
+    const res = compress
+      ? await window.app.compressRender({ tasks })
+      : await window.app.resizeRender({ tasks, keys, previews: s.previews });
     if (res.declined) {
       s.tasks.forEach(t => { t.state = null; });
     } else {
@@ -2724,15 +2796,15 @@ async function startResize() {
       log(`startResize: finished — ${JSON.stringify(s.lastRun)}`);
     }
   } catch (err) {
-    alert(`Resize failed: ${err.message}`);
+    alert(`${compress ? 'Compress' : 'Resize'} failed: ${err.message}`);
     log(`startResize: FAILED — ${err.message}`);
-    s.tasks.forEach(t => { if (t.state === 'waiting' || t.state === 'rendering') t.state = null; });
+    s.tasks.forEach(t => { if (['waiting', 'rendering', 'compressing'].includes(t.state)) t.state = null; });
   } finally {
     s.running = false;
     s.cancelling = false;
     renderResizeModal();
-    // The new files now exist: refresh the "resizes exist" notes.
-    inspectResizeSources();
+    // The files changed: refresh the "resizes exist" / "over 32 MB" notes.
+    inspectResizeTasks();
   }
 }
 
@@ -2743,12 +2815,14 @@ function applyResizeProgress(p) {
   if (p.fraction != null) task.fraction = p.fraction;
   if (p.seconds != null) task.seconds = p.seconds;
   if (p.error) task.error = p.error;
+  if (p.label) task.label = p.label;
+  if (p.compressed) task.compressed = p.compressed;
   renderResizeModal();
 }
 
 function closeResizeModal() {
   if (resizeState.running) {
-    if (!confirm('A resize is still rendering. Cancel it and close?')) return;
+    if (!confirm(`A ${resizeState.mode} is still running. Cancel it and close?`)) return;
     resizeState.cancelling = true;
     window.app.resizeCancel();
   }
@@ -2843,7 +2917,11 @@ document.getElementById('bulk-autofill-btn').addEventListener('click', () => {
 });
 document.getElementById('bulk-resize-btn').addEventListener('click', () => {
   if (document.getElementById('bulk-resize-btn').disabled) return;
-  openResizeModal();
+  openResizeModal('resize');
+});
+document.getElementById('bulk-compress-btn').addEventListener('click', () => {
+  if (document.getElementById('bulk-compress-btn').disabled) return;
+  openResizeModal('compress');
 });
 document.getElementById('resize-chips').addEventListener('click', e => {
   const chip = e.target.closest('.resize-chip');
