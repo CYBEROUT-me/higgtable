@@ -56,6 +56,8 @@ const state = {
   dashboardPreset: 'week', // 'week' | 'lastWeek' | 'month' | 'prevMonth' | 'all' | 'custom'
   dashboardCustomFrom: '',
   dashboardCustomTo: '',
+  workloadTable: '',   // '' = all tables
+  workloadProduct: '', // '' = all products (Project values)
   highlightRecordId: null,
   hiddenFields: JSON.parse(localStorage.getItem('higgtable_hidden_fields') || '{}'), // { tableName: [fieldName, ...] }
   selectedIds: new Set(), // multi-selected rows in the active table, for bulk actions
@@ -81,6 +83,9 @@ let requestCounter = 0;
 
 const SEEN_IDS_KEY = 'higgtable_seen_ids_v1';
 const NOTIFICATIONS_KEY = 'higgtable_notifications_v1';
+// Deadline alerts already raised, as deadlineAlertKey strings, so each task
+// alerts once per deadline across restarts.
+const DEADLINE_ALERTS_KEY = 'higgtable_deadline_alerts_v1';
 
 // Returns { [tableName]: string[] } from the last session, or null if this
 // is the first time the app has ever run (nothing persisted yet).
@@ -253,6 +258,7 @@ async function init() {
     await preloadOtherTables();
     log(`init: all tables preloaded, total init took ${Date.now() - t0}ms`);
     runColdStartCatchUp();
+    checkDeadlineAlerts();
     snapshotSeenIds();
     startPolling();
     requestNotificationPermission();
@@ -469,6 +475,7 @@ async function pollForUpdates() {
   log('pollForUpdates: starting 5-minute refresh cycle');
   try {
     await pollAllTables();
+    checkDeadlineAlerts();
     log(`pollForUpdates: cycle finished in ${Date.now() - t0}ms`);
   } finally {
     pollInFlight = false;
@@ -547,26 +554,37 @@ function toggleMute() {
   document.getElementById('notify-mute-btn').classList.toggle('muted', next);
 }
 
-// Synthesizes a short two-tone chime via the Web Audio API — no bundled
-// audio asset to ship or license. No-ops while muted.
-function playNotificationSound() {
+// Synthesizes short tones via the Web Audio API — no bundled audio asset to
+// ship or license. No-ops while muted.
+function playTones(freqs, { type = 'sine', step = 0.09, length = 0.18 } = {}) {
   if (isNotificationsMuted()) return;
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const now = ctx.currentTime;
-  [880, 1320].forEach((freq, i) => {
+  freqs.forEach((freq, i) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = freq;
-    osc.type = 'sine';
-    const start = now + i * 0.09;
+    osc.type = type;
+    const start = now + i * step;
     gain.gain.setValueAtTime(0.0001, start);
     gain.gain.exponentialRampToValueAtTime(0.2, start + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + length);
     osc.connect(gain).connect(ctx.destination);
     osc.start(start);
-    osc.stop(start + 0.2);
+    osc.stop(start + length + 0.02);
   });
-  setTimeout(() => ctx.close(), 500);
+  setTimeout(() => ctx.close(), (freqs.length * step + length) * 1000 + 300);
+}
+
+// New task: a rising two-tone chime.
+function playNotificationSound() {
+  playTones([880, 1320]);
+}
+
+// Deadline alert: a different, more insistent pattern (three repeated
+// triangle-wave beeps, falling) so it can't be mistaken for a new task.
+function playDeadlineSound() {
+  playTones([1046, 1046, 784], { type: 'triangle', step: 0.16, length: 0.12 });
 }
 
 function renderNotificationBell() {
@@ -585,14 +603,21 @@ function renderNotificationDropdown() {
   const DEADLINE_LABELS = { overdue: 'Overdue', today: 'Due today', tomorrow: 'Due tomorrow' };
   notifications.forEach(n => {
     const liveRec = (recordsCache[n.tableName] || []).find(r => r.id === n.recordId);
-    const { priority, urgency, isUrgent } = resolveNotificationBadges(n, liveRec, today);
+    const { priority, deadline, urgency, isUrgent } = resolveNotificationBadges(n, liveRec, today);
     const btn = document.createElement('button');
-    btn.className = `notify-item${n.read ? ' read' : ''}${isUrgent ? ' urgent' : ''}`;
+    const isDeadlineAlert = n.kind === 'deadline';
+    btn.className = `notify-item${n.read ? ' read' : ''}${isUrgent ? ' urgent' : ''}${isDeadlineAlert ? ' deadline-alert' : ''}`;
     const shortTable = n.tableName.replace(' Creatives', '');
     const timeSpan = document.createElement('span');
     timeSpan.className = 'notify-item-time';
     timeSpan.textContent = new Date(n.timestamp).toLocaleString();
     btn.appendChild(timeSpan);
+    if (isDeadlineAlert) {
+      const title = document.createElement('span');
+      title.className = 'notify-alert-title';
+      title.textContent = `⏰ Deadline approaching — ${deadlineAlertLabel(deadline, today) || 'no deadline now'}`;
+      btn.appendChild(title);
+    }
     btn.appendChild(document.createTextNode(n.taskName));
     if (priority) {
       const priorityPill = document.createElement('span');
@@ -602,7 +627,7 @@ function renderNotificationDropdown() {
       if (swatch) { priorityPill.style.background = swatch.bg; priorityPill.style.color = swatch.text; }
       btn.appendChild(priorityPill);
     }
-    if (DEADLINE_LABELS[urgency]) {
+    if (DEADLINE_LABELS[urgency] && !isDeadlineAlert) {
       const deadlineSpan = document.createElement('span');
       deadlineSpan.className = `notify-deadline ${urgency}`;
       deadlineSpan.textContent = DEADLINE_LABELS[urgency];
@@ -642,6 +667,47 @@ function addLiveNotification(rec, tableName) {
   renderNotificationBell();
   if (notifyDropdownOpen) renderNotificationDropdown();
   playNotificationSound();
+}
+
+function loadDeadlineAlertKeys() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DEADLINE_ALERTS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    log(`loadDeadlineAlertKeys: JSON.parse failed, discarding malformed data — ${err.message}`);
+    return [];
+  }
+}
+
+// Raises a deadline alert for each of the selected designer's unfinished tasks
+// due in 1-2 days, once per task per deadline. Runs after the initial load,
+// after every poll cycle (which also catches a task crossing into the window
+// overnight), and when the designer picker changes.
+function checkDeadlineAlerts() {
+  if (!state.selectedDES) return;
+  const today = toISO(new Date());
+  const keys = pruneDeadlineAlertKeys(loadDeadlineAlertKeys(), today);
+  const alerted = new Set(keys);
+  const found = TARGET_TABLES.flatMap(name =>
+    findDeadlineAlerts(recordsCache[name] || [], name, state.selectedDES, today, alerted));
+  localStorage.setItem(DEADLINE_ALERTS_KEY, JSON.stringify([...keys, ...found.map(a => a.key)]));
+  if (!found.length) return;
+
+  const now = Date.now();
+  notifications = appendNotificationBatch(notifications,
+    found.map(a => recordToDeadlineAlert(a.rec, a.tableName, now, a.daysAway)));
+  persistNotifications();
+  renderNotificationBell();
+  if (notifyDropdownOpen) renderNotificationDropdown();
+  playDeadlineSound();
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    const first = found[0];
+    const n = new Notification(found.length === 1 ? 'Deadline approaching' : `${found.length} deadlines approaching`, {
+      body: found.map(a => `${a.rec.fields['Name'] || 'Untitled task'} — ${deadlineAlertLabel(a.rec.fields['Deadline'], today)}`).join('\n'),
+    });
+    n.onclick = () => { window.focus(); goToRecord(first.rec, first.tableName); };
+  }
+  log(`checkDeadlineAlerts: ${found.length} alert(s) for ${state.selectedDES}`);
 }
 
 // Jumps straight to a specific record from a notification click: switches to
@@ -896,6 +962,7 @@ function showDashboard() {
   document.getElementById('status-filters').classList.add('hidden');
   document.getElementById('des-control').classList.add('hidden');
   document.getElementById('refresh-btn').classList.add('hidden');
+  document.getElementById('workload-container').classList.add('hidden');
   document.getElementById('dashboard-container').classList.remove('hidden');
   setStatus('Dashboard: completed tasks by designer');
   syncDashboardControls();
@@ -908,10 +975,16 @@ function maybeRefreshDashboard() {
   if (!document.getElementById('dashboard-container').classList.contains('hidden')) {
     renderDashboard();
   }
+  if (!document.getElementById('workload-container').classList.contains('hidden')) {
+    renderWorkload();
+  }
 }
 
+// Back to the table view. Also closes the Workload view, which shares this
+// "everything but the table" layout with the dashboard.
 function hideDashboard() {
   document.getElementById('dashboard-container').classList.add('hidden');
+  document.getElementById('workload-container').classList.add('hidden');
   document.getElementById('records-container').classList.remove('hidden');
   document.getElementById('status-filters').classList.remove('hidden');
   document.getElementById('des-control').classList.remove('hidden');
@@ -1079,6 +1152,120 @@ function renderDashboard() {
   hoursTotalRow.insertCell().textContent = avgHours === null ? '–' : avgHours.toFixed(1);
 
   area.appendChild(hoursTable);
+}
+
+// ── Workload (manager view) ────────────────────────────────────────────────
+// Open tasks (Ready for Design + In work) per designer, and how many of them are
+// High priority, from recordsCache like the dashboard. Filters: one table and/or
+// one product (the Project field). Counting lives in workload-data.js.
+
+function showWorkload() {
+  clearTaskSelection();
+  state.selectedIds.clear();
+  updateBulkActionsBar();
+  document.getElementById('records-container').classList.add('hidden');
+  document.getElementById('status-filters').classList.add('hidden');
+  document.getElementById('des-control').classList.add('hidden');
+  document.getElementById('refresh-btn').classList.add('hidden');
+  document.getElementById('dashboard-container').classList.add('hidden');
+  document.getElementById('workload-container').classList.remove('hidden');
+  setStatus('Workload: open tasks per designer');
+  renderWorkload();
+}
+
+function workloadSources() {
+  return TARGET_TABLES.map(name => ({ tableName: name, records: recordsCache[name] || [] }));
+}
+
+function renderWorkload() {
+  const sources = workloadSources();
+  const table = state.workloadTable || null;
+
+  document.querySelectorAll('.workload-scope').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.table === state.workloadTable);
+  });
+  // Products offered are the ones present in the chosen table; a product that
+  // isn't there falls back to "All products" rather than showing an empty list.
+  const products = listWorkloadProducts(sources, table);
+  if (state.workloadProduct && !products.includes(state.workloadProduct)) state.workloadProduct = '';
+  const select = document.getElementById('workload-product');
+  select.innerHTML = '';
+  [['', 'All products'], ...products.map(p => [p, p])].forEach(([value, label]) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  });
+  select.value = state.workloadProduct;
+
+  const { rows, totals } = computeWorkload(sources, { table, product: state.workloadProduct });
+  const area = document.getElementById('workload-table-area');
+  area.innerHTML = '';
+
+  const notLoaded = TARGET_TABLES.filter(name => !recordsCache[name] && (!table || name === table));
+  if (notLoaded.length) {
+    const note = document.createElement('p');
+    note.className = 'dash-note warn';
+    note.textContent = `Still loading: ${notLoaded.join(', ')} — counts will update once ready.`;
+    area.appendChild(note);
+  }
+
+  if (!rows.length) {
+    const empty = document.createElement('p');
+    empty.className = 'dash-note';
+    empty.textContent = `No ${WORKLOAD_STATUSES.join(' / ')} tasks for this filter.`;
+    area.appendChild(empty);
+    return;
+  }
+
+  const tableEl = document.createElement('table');
+  tableEl.className = 'dash-table';
+  const caption = document.createElement('caption');
+  const scope = [table ? table.replace(' Creatives', '') : 'All tables', state.workloadProduct || 'all products'].join(' · ');
+  caption.textContent = `Open tasks (${WORKLOAD_STATUSES.join(' + ')}) by designer — ${scope}`;
+  tableEl.appendChild(caption);
+
+  const hr = tableEl.createTHead().insertRow();
+  ['#', 'Designer', 'Open', ...WORKLOAD_STATUSES, 'High priority'].forEach((label, i) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    if (i >= 3) th.className = 'dash-type-header';
+    hr.appendChild(th);
+  });
+
+  const maxOpen = Math.max(...rows.map(r => r.open));
+  const countCell = (tr, count, extra = '') => {
+    const td = tr.insertCell();
+    td.className = `dash-type-count${count ? extra : ' zero'}`;
+    td.textContent = count || '–';
+  };
+  const tbody = tableEl.createTBody();
+  rows.forEach((row, i) => {
+    const tr = tbody.insertRow();
+    const tdRank = tr.insertCell(); tdRank.textContent = i + 1; tdRank.className = 'dash-rank';
+    const tdName = tr.insertCell(); tdName.textContent = row.des; tdName.className = 'dash-name';
+
+    const tdBar = tr.insertCell(); tdBar.className = 'dash-bar-cell';
+    const track = document.createElement('div'); track.className = 'dash-bar-track';
+    const fill = document.createElement('div'); fill.className = 'dash-bar-fill';
+    fill.style.width = `${Math.max(4, (row.open / maxOpen) * 100)}%`;
+    const label = document.createElement('span'); label.className = 'dash-bar-label'; label.textContent = row.open;
+    track.appendChild(fill); track.appendChild(label);
+    tdBar.appendChild(track);
+
+    WORKLOAD_STATUSES.forEach(st => countCell(tr, row.statuses[st]));
+    countCell(tr, row.high, ' high');
+  });
+
+  const totalRow = tbody.insertRow();
+  totalRow.className = 'total-row';
+  totalRow.insertCell().textContent = '';
+  totalRow.insertCell().textContent = 'Total';
+  totalRow.insertCell().textContent = totals.open;
+  WORKLOAD_STATUSES.forEach(st => countCell(totalRow, totals.statuses[st]));
+  countCell(totalRow, totals.high, ' high');
+
+  area.appendChild(tableEl);
 }
 
 // ── Record detail modal ─────────────────────────────────────────────────
@@ -1690,6 +1877,48 @@ async function copySelectedTaskNames() {
   }
 }
 
+// Same as Copy name, but each name is followed by the task's brief (its
+// Description, with Airtable's escaping undone), tasks separated by a blank line.
+async function copySelectedNamesAndBriefs() {
+  const tasks = state.records
+    .filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
+    .sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']))
+    .map(r => ({ name: r.fields['Name'], description: r.fields['Description'] }));
+  if (!tasks.length) return;
+
+  const btn = document.getElementById('bulk-copy-brief-btn');
+  try {
+    await window.app.copyToClipboard(formatNameAndBriefs(tasks));
+    btn.textContent = tasks.length === 1 ? '✓ Copied' : `✓ Copied ${tasks.length}`;
+    setTimeout(() => { btn.textContent = '⧉ Copy name + brief'; }, 1200);
+    log(`copySelectedNamesAndBriefs: copied ${tasks.length} task(s)`);
+  } catch (err) {
+    alert(`Could not copy: ${err.message}`);
+    log(`copySelectedNamesAndBriefs: FAILED — ${err.message}`);
+  }
+}
+
+// Task details modal: copies the open task's brief alone.
+async function copyOpenTaskBrief() {
+  if (!currentDetailRecord) return;
+  const btn = document.getElementById('copy-brief-btn');
+  const brief = briefFromDescription(currentDetailRecord.fields['Description']);
+  if (!brief) {
+    btn.textContent = 'No brief';
+    setTimeout(() => { btn.textContent = '⧉ Copy brief'; }, 1200);
+    return;
+  }
+  try {
+    await window.app.copyToClipboard(brief);
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = '⧉ Copy brief'; }, 1200);
+    log(`copyOpenTaskBrief: copied the brief of ${currentDetailRecord.fields['Name'] || currentDetailRecord.id}`);
+  } catch (err) {
+    alert(`Could not copy: ${err.message}`);
+    log(`copyOpenTaskBrief: FAILED — ${err.message}`);
+  }
+}
+
 // ── Task selection & rename panel ────────────────────────────────────────
 
 // Finder-style multi-select: plain click still picks a single task for
@@ -2259,6 +2488,25 @@ async function renderAutofillApprovalList() {
       `optional — applied to ${statCount} Stat task${statCount === 1 ? '' : 's'}`;
   }
 
+  // Time spent → "Hours". In every Creatives table it is a single select of
+  // "HH:MM" choices (00:15 … 06:00), so the table's own choices are offered,
+  // once for all tasks and per task. Nothing is set by default.
+  const hoursChoices = autofillHoursChoices();
+  const hoursRow = document.getElementById('autofill-hours-row');
+  const hoursAll = document.getElementById('autofill-hours-all');
+  hoursRow.classList.toggle('hidden', !hoursChoices);
+  const fillHoursSelect = (sel, emptyLabel) => {
+    sel.innerHTML = '';
+    [['', emptyLabel], ...(hoursChoices || []).map(h => [h, h])].forEach(([value, label]) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    });
+  };
+  fillHoursSelect(hoursAll, '— don\'t set —');
+  pendingAutofillCandidates.forEach(c => { c.hours = ''; });
+
   const thumbs = await Promise.all(pendingAutofillCandidates.map(c =>
     c.preview ? window.app.readImageDataUrl(c.preview.path).catch(() => null) : Promise.resolve(null)
   ));
@@ -2314,9 +2562,44 @@ async function renderAutofillApprovalList() {
       info.appendChild(line);
     }
 
+    if (hoursChoices) {
+      const line = document.createElement('div');
+      line.className = 'autofill-approval-line autofill-hours-line';
+      const tagEl = document.createElement('span');
+      tagEl.className = 'autofill-approval-line-tag';
+      tagEl.textContent = 'Hours';
+      line.appendChild(tagEl);
+      const sel = document.createElement('select');
+      sel.className = 'autofill-hours-select';
+      sel.dataset.idx = String(i);
+      const current = c.rec.fields['Hours'];
+      fillHoursSelect(sel, current ? `keep ${current}` : '— not set —');
+      sel.addEventListener('change', () => { c.hours = sel.value; });
+      line.appendChild(sel);
+      info.appendChild(line);
+    }
+
     row.appendChild(info);
     list.appendChild(row);
   });
+}
+
+// The active table's "Hours" choices, or null when the field is missing or not
+// a single select (then the time-spent controls stay hidden).
+function autofillHoursChoices() {
+  const field = (state.tables[state.activeTable]?.fields || []).find(f => f.name === 'Hours');
+  if (!field || field.type !== 'singleSelect') {
+    log(`autofillHoursChoices: ${state.activeTable} has no single-select Hours field (${field ? field.type : 'missing'}), time spent hidden`);
+    return null;
+  }
+  const choices = (field.options?.choices || []).map(c => c.name);
+  return choices.length ? choices : null;
+}
+
+// "Set for all" overwrites every task's choice; a task can then be changed alone.
+function applyAutofillHoursToAll(value) {
+  pendingAutofillCandidates.forEach(c => { c.hours = value; });
+  document.querySelectorAll('#autofill-approval-list .autofill-hours-select').forEach(sel => { sel.value = value; });
 }
 
 function closeAutofillModal() {
@@ -2334,6 +2617,7 @@ function isStatCandidate(c) {
 async function confirmAutofill() {
   const toUpload = pendingAutofillCandidates.filter(c => c.preview?.include && c.preview.path);
   const toSetTiming = pendingAutofillCandidates.filter(c => c.timing?.include && c.timing.choice);
+  const toSetHours = pendingAutofillCandidates.filter(c => c.hours);
 
   const figmaLink = (document.getElementById('autofill-figma-link').value || '').trim();
   const statCandidates = figmaLink ? pendingAutofillCandidates.filter(isStatCandidate) : [];
@@ -2357,7 +2641,7 @@ async function confirmAutofill() {
     return;
   }
 
-  if (!toUpload.length && !toSetTiming.length && !statCandidates.length && !linkPairs.length) {
+  if (!toUpload.length && !toSetTiming.length && !statCandidates.length && !linkPairs.length && !toSetHours.length) {
     closeAutofillModal();
     return;
   }
@@ -2365,7 +2649,7 @@ async function confirmAutofill() {
   const btn = document.getElementById('autofill-approval-confirm-btn');
   btn.disabled = true;
   btn.textContent = 'Applying...';
-  let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0, creativeLinked = 0;
+  let uploaded = 0, uploadFailed = 0, timed = 0, linked = 0, dated = 0, creativeLinked = 0, hoursSet = 0;
   try {
     // Attachments go one at a time — the upload endpoint takes a single file.
     const uploadedOk = [];
@@ -2394,9 +2678,10 @@ async function confirmAutofill() {
       pending.set(c.rec.id, entry);
     };
     toSetTiming.forEach(c => addFields(c, { Timing: c.timing.choice }));
+    toSetHours.forEach(c => addFields(c, { Hours: c.hours }));
     statCandidates.forEach(c => addFields(c, { [figmaField]: figmaLink }));
     linkPairs.forEach(p => addFields(p.task.candidate, { [creativeField]: p.link }));
-    [...uploadedOk, ...toSetTiming, ...statCandidates, ...linkPairs.map(p => p.task.candidate)]
+    [...uploadedOk, ...toSetTiming, ...toSetHours, ...statCandidates, ...linkPairs.map(p => p.task.candidate)]
       .forEach(c => addFields(c, { 'Date Done': today }));
 
     if (pending.size && tableInfo) {
@@ -2414,11 +2699,12 @@ async function confirmAutofill() {
         timed = toSetTiming.length;
         linked = statCandidates.length;
         creativeLinked = linkPairs.length;
+        hoursSet = toSetHours.length;
         dated = entries.length;
-        log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, ${FIGMA_LINK_FIELD} ${linked}, ${CREATIVE_LINK_FIELD} ${creativeLinked}, Date Done ${dated}`);
+        log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, Hours ${hoursSet}, ${FIGMA_LINK_FIELD} ${linked}, ${CREATIVE_LINK_FIELD} ${creativeLinked}, Date Done ${dated}`);
       } catch (err) {
         log(`confirmAutofill: batched update FAILED — ${err.message}`);
-        alert(`Previews uploaded, but the Timing / link / Date Done update failed:\n\n${err.message}`);
+        alert(`Previews uploaded, but the Timing / Hours / link / Date Done update failed:\n\n${err.message}`);
       }
     }
 
@@ -2428,6 +2714,7 @@ async function confirmAutofill() {
       `Previews uploaded: ${uploaded}`,
       uploadFailed ? `Preview upload failed: ${uploadFailed}` : null,
       `Timing set: ${timed}`,
+      hoursSet ? `Hours set: ${hoursSet}` : null,
       linked ? `${FIGMA_LINK_FIELD} set: ${linked}` : null,
       creativeLinked ? `${CREATIVE_LINK_FIELD} set: ${creativeLinked}` : null,
       `Date Done set: ${dated}`,
@@ -2869,6 +3156,9 @@ document.getElementById('tabs').addEventListener('click', e => {
   if (btn.id === 'dashboard-btn') {
     hideCanvasTab();
     showDashboard();
+  } else if (btn.id === 'workload-btn') {
+    hideCanvasTab();
+    showWorkload();
   } else if (btn.id === 'canvas-btn') {
     hideDashboard();
     showCanvasTab();
@@ -2884,6 +3174,7 @@ document.getElementById('des-select').addEventListener('change', e => {
   state.selectedDES ? localStorage.setItem('higgtable_des', state.selectedDES)
                      : localStorage.removeItem('higgtable_des');
   render();
+  checkDeadlineAlerts();
 });
 
 document.getElementById('refresh-btn').addEventListener('click', () => {
@@ -2975,6 +3266,8 @@ document.getElementById('auto-fix-ratio-input').addEventListener('change', async
 });
 
 document.getElementById('bulk-copy-name-btn').addEventListener('click', copySelectedTaskNames);
+document.getElementById('bulk-copy-brief-btn').addEventListener('click', copySelectedNamesAndBriefs);
+document.getElementById('copy-brief-btn').addEventListener('click', copyOpenTaskBrief);
 
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   // Also close the rename panel: a single click selects the task AND opens the
@@ -3006,6 +3299,17 @@ document.getElementById('dashboard-controls').addEventListener('click', e => {
   syncDashboardControls();
   renderDashboard();
 });
+document.getElementById('workload-controls').addEventListener('click', e => {
+  const btn = e.target.closest('.workload-scope');
+  if (!btn) return;
+  state.workloadTable = btn.dataset.table;
+  renderWorkload();
+});
+document.getElementById('workload-product').addEventListener('change', e => {
+  state.workloadProduct = e.target.value;
+  renderWorkload();
+});
+document.getElementById('autofill-hours-all').addEventListener('change', e => applyAutofillHoursToAll(e.target.value));
 document.getElementById('dashboard-from').addEventListener('change', e => {
   state.dashboardCustomFrom = e.target.value;
   renderDashboard();

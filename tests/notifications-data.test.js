@@ -191,3 +191,63 @@ test('resolveNotificationBadges leaves a distant deadline non-urgent', () => {
   expect(r.urgency).toBe('normal');
   expect(r.isUrgent).toBe(false);
 });
+
+const {
+  daysUntilDeadline,
+  deadlineAlertKey,
+  findDeadlineAlerts,
+  recordToDeadlineAlert,
+  deadlineAlertLabel,
+  pruneDeadlineAlertKeys,
+} = require('../renderer/notifications-data');
+
+test('daysUntilDeadline counts whole local days, across a month end', () => {
+  expect(daysUntilDeadline('2026-11-01', '2026-10-30')).toBe(2);
+  expect(daysUntilDeadline('2026-10-30', '2026-10-30')).toBe(0);
+  expect(daysUntilDeadline('2026-10-29', '2026-10-30')).toBe(-1);
+});
+
+test('findDeadlineAlerts picks the designer\'s unfinished tasks due in 1-2 days, once', () => {
+  const today = '2026-10-29';
+  const records = [
+    rec('a', { DES: 'Ann', Deadline: '2026-10-30', Status: 'In work' }),
+    rec('b', { DES: 'Ann', Deadline: '2026-10-31', Status: 'Ready for Design' }),
+    rec('c', { DES: 'Ann', Deadline: '2026-11-01', Status: 'In work' }),
+    rec('d', { DES: 'Ann', Deadline: '2026-10-29', Status: 'In work' }),
+    rec('e', { DES: 'Ann', Deadline: '2026-10-30', Status: 'To accept' }),
+    rec('f', { DES: 'Ann', Deadline: '2026-10-30', Status: 'Done' }),
+    rec('g', { DES: 'Bob', Deadline: '2026-10-30', Status: 'In work' }),
+    rec('h', { DES: 'Ann', Status: 'In work' }),
+  ];
+  const found = findDeadlineAlerts(records, 'VCP Creatives', 'Ann', today, new Set());
+  expect(found.map(f => [f.rec.id, f.daysAway])).toEqual([['a', 1], ['b', 2]]);
+  expect(found[0].key).toBe(deadlineAlertKey('VCP Creatives', 'a', '2026-10-30'));
+
+  const alerted = new Set(found.map(f => f.key));
+  expect(findDeadlineAlerts(records, 'VCP Creatives', 'Ann', today, alerted)).toEqual([]);
+  expect(findDeadlineAlerts(records, 'VCP Creatives', '', today, new Set())).toEqual([]);
+});
+
+test('findDeadlineAlerts alerts again when the deadline moves', () => {
+  const alerted = new Set([deadlineAlertKey('VCP Creatives', 'a', '2026-10-30')]);
+  const moved = [rec('a', { DES: 'Ann', Deadline: '2026-10-31', Status: 'In work' })];
+  expect(findDeadlineAlerts(moved, 'VCP Creatives', 'Ann', '2026-10-29', alerted)).toHaveLength(1);
+});
+
+test('recordToDeadlineAlert marks the entry as a deadline alert', () => {
+  const entry = recordToDeadlineAlert(rec('a', { Name: 'T', Deadline: '2026-10-30' }), 'VCP Creatives', 5, 1);
+  expect(entry).toMatchObject({ id: 'deadline:VCP Creatives:a:5', kind: 'deadline', daysAway: 1, recordId: 'a', deadline: '2026-10-30', read: false });
+});
+
+test('deadlineAlertLabel describes the live deadline', () => {
+  expect(deadlineAlertLabel('2026-10-31', '2026-10-29')).toBe('Due in 2 days');
+  expect(deadlineAlertLabel('2026-10-30', '2026-10-29')).toBe('Due tomorrow');
+  expect(deadlineAlertLabel('2026-10-29', '2026-10-29')).toBe('Due today');
+  expect(deadlineAlertLabel('2026-10-28', '2026-10-29')).toBe('Overdue');
+  expect(deadlineAlertLabel(null, '2026-10-29')).toBeNull();
+});
+
+test('pruneDeadlineAlertKeys drops keys whose deadline has passed', () => {
+  const keys = ['T|a|2026-10-28', 'T|b|2026-10-29', 'T|c|2026-10-31'];
+  expect(pruneDeadlineAlertKeys(keys, '2026-10-29')).toEqual(['T|b|2026-10-29', 'T|c|2026-10-31']);
+});

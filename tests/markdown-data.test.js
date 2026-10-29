@@ -90,3 +90,21 @@ describe('markdown-escaped punctuation', () => {
     expect(html).toContain('href="https://example.com/a"');
   });
 });
+
+const { briefFromDescription, formatNameAndBriefs } = require('../renderer/markdown-data');
+
+test('briefFromDescription undoes Airtable punctuation escaping and trims', () => {
+  expect(briefFromDescription('  Use OL\\_10838 \\- see **hook**\\!\n')).toBe('Use OL_10838 - see **hook**!');
+});
+
+test('briefFromDescription returns an empty string for a missing Description', () => {
+  expect(briefFromDescription(undefined)).toBe('');
+});
+
+test('formatNameAndBriefs puts each brief under its name, tasks separated by a blank line', () => {
+  expect(formatNameAndBriefs([
+    { name: 'PL_1_9x16', description: 'Line one\nLine two' },
+    { name: 'PL_2_9x16', description: '' },
+    { name: 'PL_3_9x16', description: 'A\\_B' },
+  ])).toBe('PL_1_9x16\nLine one\nLine two\n\nPL_2_9x16\n\nPL_3_9x16\nA_B');
+});

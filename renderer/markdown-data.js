@@ -69,9 +69,28 @@ function renderMarkdownLite(text) {
   );
 }
 
+// The task's brief as plain text for the clipboard: the Description with
+// Airtable's markdown escaping undone ("OL\\_10838" -> "OL_10838"), the same
+// character set task-refs.js unescapes. Markdown itself (**bold**, [x](url))
+// is kept, since it reads fine pasted anywhere.
+function briefFromDescription(text) {
+  return String(text || '').replace(/\\([\\_*[\]()~`>#+\-=|{}.!])/g, '$1').trim();
+}
+
+// "Name\nbrief" per task, tasks separated by a blank line. A task with no
+// brief contributes its name alone.
+function formatNameAndBriefs(tasks) {
+  return tasks
+    .map(t => {
+      const brief = briefFromDescription(t.description);
+      return brief ? `${t.name}\n${brief}` : t.name;
+    })
+    .join('\n\n');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, linkifyUrls, renderMarkdownLite, unescapeBackslashes,
-    linkifyMarkdownLinks, unescapePunctuation,
+    linkifyMarkdownLinks, unescapePunctuation, briefFromDescription, formatNameAndBriefs,
   };
 }

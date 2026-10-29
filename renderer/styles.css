@@ -151,8 +151,8 @@ footer#statusbar.error { color: #f66; }
 #bulk-actions-count { color: var(--accent); font-weight: 600; }
 
 /* ── Dashboard ── */
-#dashboard-container { flex: 1; overflow: auto; min-height: 0; padding: var(--space-6) var(--space-7); }
-#dashboard-controls { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap; }
+#dashboard-container, #workload-container { flex: 1; overflow: auto; min-height: 0; padding: var(--space-6) var(--space-7); }
+#dashboard-controls, #workload-controls { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap; }
 .dash-controls-label { color: var(--text-secondary); font-size: 12px; margin-right: var(--space-1); }
 .dash-preset { background: var(--bg-surface-2); border: 1px solid var(--border-strong); color: var(--text-secondary); padding: var(--space-2) var(--space-4); border-radius: 999px; cursor: pointer; font-size: 11px; }
 .dash-preset:hover { color: var(--text-primary); border-color: var(--accent); }
@@ -217,6 +217,7 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .autofill-approval-box > p,
 .autofill-approval-box > #autofill-figma-row,
 .autofill-approval-box > #autofill-links-row,
+.autofill-approval-box > #autofill-hours-row,
 .autofill-approval-box > .modal-actions { flex-shrink: 0; }
 #autofill-approval-list { flex: 1 1 auto; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-4) 0 var(--space-5); }
 .autofill-approval-row { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-2); border-radius: var(--radius-sm); }
@@ -426,3 +427,18 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
   color: var(--text-primary);
   min-width: 130px;
 }
+
+/* Workload view (reuses the dashboard's .dash-* look) */
+#workload-product { background: var(--bg-surface-2); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); font-size: 12px; }
+.dash-type-count.high { color: #f66; font-weight: 600; }
+
+/* Deadline alerts in the bell list: accented, distinct from new-task entries */
+.notify-item.deadline-alert { border-left: 3px solid #fa0; background: rgba(255, 170, 0, 0.08); }
+.notify-item.deadline-alert .notify-alert-title { display: block; color: #fa0; font-weight: 600; font-size: 11px; margin-bottom: var(--space-1); }
+
+/* Autofill: time spent */
+#autofill-hours-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
+#autofill-hours-row label { color: var(--text-secondary); font-size: 12px; flex-shrink: 0; }
+#autofill-hours-note { color: var(--text-muted); font-size: 11px; }
+#autofill-hours-row select, .autofill-hours-select { background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: 12px; }
+.autofill-hours-line { cursor: default; }

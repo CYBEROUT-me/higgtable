@@ -16,6 +16,7 @@
         <button class="tab" data-table="LB Creatives">LB</button>
         <button class="tab" data-table="OMGF Creatives">OMGF</button>
         <button id="dashboard-btn" class="tab" title="Task completion dashboard">📊 Dashboard</button>
+        <button id="workload-btn" class="tab" title="Open tasks per designer, for the manager">👥 Workload</button>
         <button id="canvas-btn" class="tab" title="Lineage canvas — see how creatives branch from one another">🕸 Canvas</button>
       </nav>
       <div id="header-actions">
@@ -95,6 +96,7 @@
     <button id="bulk-resize-btn" title="Make the 1x1, 4x5 and 16x9 versions (and custom sizes) of each selected task's _9x16.mp4, next to it">Resize</button>
     <button id="bulk-compress-btn" title="Shrink every video of the selected tasks that is over 32 MB, in place (the 9x16 master and its resizes)">Compress</button>
     <button id="bulk-copy-name-btn" title="Copy the selected task name(s) to the clipboard">⧉ Copy name</button>
+    <button id="bulk-copy-brief-btn" title="Copy each selected task's name followed by its brief (Description)">⧉ Copy name + brief</button>
     <button id="bulk-clear-btn">Clear selection</button>
   </div>
 
@@ -117,6 +119,20 @@
       <button id="dashboard-refresh-btn" title="Refresh dashboard data">⟳</button>
     </div>
     <div id="dashboard-table-area"></div>
+  </div>
+  <div id="workload-container" class="hidden">
+    <div id="workload-controls">
+      <span class="dash-controls-label">Table:</span>
+      <button class="dash-preset workload-scope" data-table="">All tables</button>
+      <button class="dash-preset workload-scope" data-table="VCP Creatives">VCP</button>
+      <button class="dash-preset workload-scope" data-table="PLM Creatives">PLM</button>
+      <button class="dash-preset workload-scope" data-table="CMC Creatives">CMC</button>
+      <button class="dash-preset workload-scope" data-table="LB Creatives">LB</button>
+      <button class="dash-preset workload-scope" data-table="OMGF Creatives">OMGF</button>
+      <span class="dash-controls-label">Product:</span>
+      <select id="workload-product"></select>
+    </div>
+    <div id="workload-table-area"></div>
   </div>
 
   <div id="canvas-container" class="hidden">
@@ -194,6 +210,7 @@
     <div class="modal-box record-modal-box">
       <div class="record-modal-header">
         <h2 id="record-modal-title">Task details</h2>
+        <button id="copy-brief-btn" title="Copy this task's brief (Description) to the clipboard">⧉ Copy brief</button>
         <button id="view-lineage-btn" title="See this task's full lineage">🕸 View lineage</button>
         <button id="record-fields-settings-btn" title="Choose which fields to show">⚙</button>
         <button id="record-modal-close" title="Close">×</button>
@@ -257,6 +274,11 @@
         <div id="autofill-links-warning"></div>
         <div id="autofill-links-pairs"></div>
       </div>
+      <div id="autofill-hours-row" class="hidden">
+        <label for="autofill-hours-all">Time spent (Hours)</label>
+        <select id="autofill-hours-all"></select>
+        <span id="autofill-hours-note">sets every task; change one below to override it</span>
+      </div>
       <div id="autofill-approval-list"></div>
       <div class="modal-actions">
         <button id="autofill-approval-confirm-btn" class="primary">Apply Selected</button>
@@ -274,6 +296,7 @@
   <script src="task-search.js"></script>
   <script src="link-paste.js"></script>
   <script src="autofill-data.js"></script>
+  <script src="workload-data.js"></script>
   <script src="resize-plan.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>

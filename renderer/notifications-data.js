@@ -94,6 +94,68 @@ function appendNotificationBatch(list, entries) {
   return [...entries, ...list].slice(0, MAX_NOTIFICATIONS);
 }
 
+// ── Deadline alerts ─────────────────────────────────────────────────────
+// A task whose Deadline is this many days away raises a one-off alert.
+const DEADLINE_ALERT_DAYS = [1, 2];
+
+// Whole days from `today` to `deadline` (both YYYY-MM-DD), local dates. Rounded
+// because a DST change makes one day 23 or 25 hours long.
+function daysUntilDeadline(deadline, today) {
+  const ms = new Date(`${deadline}T00:00:00`) - new Date(`${today}T00:00:00`);
+  return Math.round(ms / 86400000);
+}
+
+// One alert per task per deadline: moving the deadline makes a new key, so the
+// task can alert again for its new date.
+function deadlineAlertKey(tableName, recordId, deadline) {
+  return `${tableName}|${recordId}|${deadline}`;
+}
+
+// The selected designer's unfinished tasks due in 1-2 days that have not
+// alerted yet. `alertedKeys` is a Set of deadlineAlertKey values.
+function findDeadlineAlerts(records, tableName, des, today, alertedKeys) {
+  if (!des) return [];
+  const out = [];
+  (records || []).forEach(rec => {
+    const deadline = rec.fields['Deadline'];
+    if (!deadline || (rec.fields['DES'] || '') !== des) return;
+    if (COMPLETED_STATUSES.includes(rec.fields['Status'] || '')) return;
+    const daysAway = daysUntilDeadline(deadline, today);
+    if (!DEADLINE_ALERT_DAYS.includes(daysAway)) return;
+    const key = deadlineAlertKey(tableName, rec.id, deadline);
+    if (alertedKeys.has(key)) return;
+    out.push({ rec, tableName, daysAway, key });
+  });
+  return out;
+}
+
+// A deadline alert is an ordinary notification marked `kind: 'deadline'`, so
+// the bell list, unread count and click-through all work unchanged.
+function recordToDeadlineAlert(rec, tableName, now, daysAway) {
+  return {
+    ...recordToNotification(rec, tableName, now),
+    id: `deadline:${tableName}:${rec.id}:${now}`,
+    kind: 'deadline',
+    daysAway,
+  };
+}
+
+// Label for a deadline alert, from the live deadline so it stays right as days
+// pass: "Due in 2 days", "Due tomorrow", "Due today", "Overdue".
+function deadlineAlertLabel(deadline, today) {
+  if (!deadline) return null;
+  const d = daysUntilDeadline(deadline, today);
+  if (d < 0) return 'Overdue';
+  if (d === 0) return 'Due today';
+  if (d === 1) return 'Due tomorrow';
+  return `Due in ${d} days`;
+}
+
+// Drops keys whose deadline has passed, so the persisted list stays small.
+function pruneDeadlineAlertKeys(keys, today) {
+  return keys.filter(k => (k.split('|').pop() || '') >= today);
+}
+
 function unreadCount(list) {
   return list.filter(n => !n.read).length;
 }
@@ -114,5 +176,12 @@ if (typeof module !== 'undefined' && module.exports) {
     appendNotificationBatch,
     unreadCount,
     markAllRead,
+    DEADLINE_ALERT_DAYS,
+    daysUntilDeadline,
+    deadlineAlertKey,
+    findDeadlineAlerts,
+    recordToDeadlineAlert,
+    deadlineAlertLabel,
+    pruneDeadlineAlertKeys,
   };
 }
