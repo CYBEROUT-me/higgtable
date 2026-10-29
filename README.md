@@ -32,7 +32,7 @@ Your token is stored locally on your machine only (never bundled in the app or s
 
 ## Using the app
 
-- **Tabs** (VCP / PLM / CMC / LB) — browse each Creatives table. Filter by status or by designer ("You:").
+- **Tabs** (VCP / PLM / CMC / LB / OMGF) — browse each Creatives table. Filter by status or by designer ("You:").
 - **Double-click a task row** — opens the full task details, with every Airtable field editable directly (saves back to Airtable immediately). Use the ⚙ icon there to hide fields you don't need to see.
 - **Select a task, then drop media files** — HiggTable detects each file's aspect ratio and renames it to match the task's naming convention, placing renamed files in a subfolder named after the task.
 - **Dashboard tab** — leaderboard of completed ("Done") tasks by designer, broken down by type, filterable by period (week/month/custom range).
@@ -45,6 +45,8 @@ Your token is stored locally on your machine only (never bundled in the app or s
 
 ## Development
 
+For architecture, conventions and project history, see [CLAUDE.md](CLAUDE.md).
+
 ```bash
 npm install
 npm start          # run locally
@@ -56,8 +58,10 @@ npm test            # run tests
 1. Bump `version` in `package.json`.
 2. Build and publish to GitHub Releases:
    ```bash
-   export GH_TOKEN=<a GitHub personal access token with repo access>
-   npm run release          # both macOS and Windows
+   GH_TOKEN=$(gh auth token) npm run release   # both macOS and Windows
    ```
+   This takes the token from the GitHub CLI login (`gh auth login`). If you get
+   `HttpError: 401`, a stale `GH_TOKEN` is exported in that shell — run
+   `unset GH_TOKEN` and try again.
    Or `npm run release:mac` / `npm run release:win` individually.
 3. This is what both the Windows silent updater and the macOS update check on launch actually look at — without publishing a release, coworkers never see the new version.
