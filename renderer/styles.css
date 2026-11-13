@@ -407,7 +407,7 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 #resize-custom-row button { background: var(--bg-surface-2); border: 1px solid var(--border-strong); color: var(--text-primary); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-4); font-size: 12px; cursor: pointer; }
 #resize-custom-note { color: var(--text-muted); }
 #resize-task-list { flex: 1 1 auto; min-height: 60px; overflow-y: auto; margin-bottom: var(--space-5); }
-.resize-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 190px; gap: var(--space-4); align-items: center; padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border); font-size: 12px; }
+.resize-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px 270px; gap: var(--space-4); align-items: center; padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border); font-size: 12px; }
 .resize-row-head { color: var(--text-muted); font-weight: 500; }
 .resize-row-name { font-family: monospace; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
 .resize-row-source, .resize-row-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
@@ -503,3 +503,4 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 #task-panel-brief a { color: var(--accent); text-decoration: underline; word-break: break-all; }
 #task-panel-brief a:hover { color: var(--accent-strong); }
 #bulk-finish-btn { font-weight: 600; color: var(--accent); border-color: var(--accent-strong); }
+.task-panel-pick > span:last-child { flex-shrink: 0; white-space: nowrap; }
