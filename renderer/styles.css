@@ -500,3 +500,6 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .task-panel-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
 .task-panel-pick .ok { color: var(--accent); } .task-panel-pick .warn { color: #e0a43a; } .task-panel-pick .muted { color: var(--text-muted); }
 #task-panel-brief strong { color: var(--text-primary); }
+#task-panel-brief a { color: var(--accent); text-decoration: underline; word-break: break-all; }
+#task-panel-brief a:hover { color: var(--accent-strong); }
+#bulk-finish-btn { font-weight: 600; color: var(--accent); border-color: var(--accent-strong); }

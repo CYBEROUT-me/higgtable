@@ -71,6 +71,8 @@ let currentDetailRecord = null;
 let currentDetailTable = null;
 
 const recordsCache = {};
+// Per table: { syncedAt, fullSyncedAt } (ms) of the records in recordsCache.
+const tableSyncMeta = {};
 const seenTaskIds = {};
 const tablesInFlight = new Set(); // prevents duplicate concurrent fetches for the same table
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -254,8 +256,23 @@ async function init() {
     }
 
     renderStatusChips();
+    await primeFromDiskCache();
     await loadTable(state.activeTable);
-    log(`init: active table ready (${Date.now() - t0}ms elapsed), preloading the rest in background`);
+    log(`init: active table ready (${Date.now() - t0}ms elapsed), syncing and preloading the rest in background`);
+    // Tables shown from disk get their changes now; tables with no cache yet are
+    // downloaded in full, as before.
+    await Promise.all(TARGET_TABLES.filter(n => recordsCache[n] && tableSyncMeta[n]).map(async name => {
+      tablesInFlight.add(name);
+      try {
+        await syncTable(name);
+        if (state.activeTable === name) { state.records = recordsCache[name]; refreshDES(); render(); }
+      } catch (err) {
+        log(`init: sync of ${name} FAILED — ${err.message}`);
+      } finally {
+        tablesInFlight.delete(name);
+      }
+    }));
+    maybeRefreshDashboard();
     await preloadOtherTables();
     log(`init: all tables preloaded, total init took ${Date.now() - t0}ms`);
     runColdStartCatchUp();
@@ -275,6 +292,65 @@ async function init() {
 }
 
 // ── Records ─────────────────────────────────────────────────────────────
+
+// ── Disk cache + incremental sync ────────────────────────────────────────
+// Records are kept on disk (main.js, userData/records-cache) so the app opens
+// at once with the last known data; after that only records modified since the
+// last sync are fetched. A full download still runs every 6 h and on refresh,
+// since an incremental sync cannot see deleted records.
+
+function recordsCacheKey(name) {
+  return `${state.baseId}_${state.tables[name].id}`;
+}
+
+// Puts a table's records in place and writes them to disk. `startedAt` is when
+// the fetch began: anything modified after it is picked up by the next sync.
+// `persist: false` skips the disk write (an incremental sync that found
+// nothing: the next start just asks for a slightly longer window).
+function storeTable(name, records, { full = false, startedAt = Date.now(), persist = true } = {}) {
+  recordsCache[name] = records;
+  const meta = tableSyncMeta[name] || (tableSyncMeta[name] = {});
+  meta.syncedAt = startedAt;
+  if (full) meta.fullSyncedAt = startedAt;
+  if (!meta.fullSyncedAt || !persist) return;
+  window.app.writeRecordsCache(recordsCacheKey(name), {
+    v: RECORDS_CACHE_VERSION, tableId: state.tables[name].id,
+    syncedAt: meta.syncedAt, fullSyncedAt: meta.fullSyncedAt, records,
+  }).catch(err => log(`storeTable(${name}): cache write FAILED — ${err.message}`));
+}
+
+async function primeFromDiskCache() {
+  const t0 = Date.now();
+  await Promise.all(TARGET_TABLES.map(async name => {
+    if (!state.tables[name] || recordsCache[name]) return;
+    const payload = await window.app.readRecordsCache(recordsCacheKey(name)).catch(() => null);
+    if (!usableCache(payload, state.tables[name].id)) return;
+    recordsCache[name] = payload.records;
+    tableSyncMeta[name] = { syncedAt: payload.syncedAt, fullSyncedAt: payload.fullSyncedAt };
+  }));
+  const loaded = TARGET_TABLES.filter(n => recordsCache[n]);
+  log(`primeFromDiskCache: ${loaded.length} table(s) from disk in ${Date.now() - t0}ms`);
+}
+
+// Brings one table up to date: only the changes when possible, else a full
+// download. Returns the fresh list, or null on failure (cache left as it was).
+async function syncTable(name) {
+  const info = state.tables[name];
+  if (!info) return null;
+  const startedAt = Date.now();
+  const since = recordsCache[name] ? incrementalSince(tableSyncMeta[name], startedAt) : null;
+  if (!since) {
+    const records = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+    storeTable(name, records, { full: true, startedAt });
+    log(`syncTable: ${name} — full, ${records.length} records in ${Date.now() - startedAt}ms`);
+    return records;
+  }
+  const changed = await window.airtable.getRecords(state.baseId, info.id, undefined, since);
+  const { records, added } = mergeChangedRecords(recordsCache[name], changed);
+  storeTable(name, records, { startedAt, persist: changed.length > 0 });
+  log(`syncTable: ${name} — ${changed.length} changed (${added.length} new) in ${Date.now() - startedAt}ms`);
+  return records;
+}
 
 async function loadTable(tableName) {
   state.activeTable = tableName;
@@ -352,11 +428,11 @@ async function loadTable(tableName) {
     log(`loadTable(${tableName}): fetched ${records.length} records in ${Date.now() - t0}ms`);
     // Guard: user may have switched tabs while this fetch was in flight
     if (state.activeTable !== tableName) {
-      recordsCache[tableName] = records;
+      storeTable(tableName, records, { full: true, startedAt: t0 });
       log(`loadTable(${tableName}): tab changed mid-fetch, caching only`);
       return;
     }
-    recordsCache[tableName] = records;
+    storeTable(tableName, records, { full: true, startedAt: t0 });
     state.records = records;
     refreshDES();
     render();
@@ -389,7 +465,7 @@ async function refreshTableData(name) {
   const t0 = Date.now();
   tablesInFlight.add(name);
   try {
-    recordsCache[name] = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+    storeTable(name, newestFirst(await window.airtable.getRecords(state.baseId, info.id)), { full: true, startedAt: t0 });
     log(`refreshTableData: ${name} — ${recordsCache[name].length} records in ${Date.now() - t0}ms`);
   } catch (err) {
     log(`refreshTableData: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
@@ -412,7 +488,7 @@ async function preloadOtherTables() {
     const t0 = Date.now();
     tablesInFlight.add(name);
     try {
-      recordsCache[name] = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+      storeTable(name, newestFirst(await window.airtable.getRecords(state.baseId, info.id)), { full: true, startedAt: t0 });
       log(`preloadOtherTables: ${name} — ${recordsCache[name].length} records in ${Date.now() - t0}ms`);
       maybeRefreshDashboard();
     } catch (err) {
@@ -500,7 +576,8 @@ async function pollOneTable(name) {
   const t0 = Date.now();
   tablesInFlight.add(name);
   try {
-    fresh = newestFirst(await window.airtable.getRecords(state.baseId, info.id));
+    fresh = await syncTable(name);
+    if (!fresh) return;
     log(`pollAllTables: ${name} — ${fresh.length} records in ${Date.now() - t0}ms`);
   } catch (err) {
     log(`pollAllTables: ${name} — FAILED after ${Date.now() - t0}ms — ${err.message}`);
@@ -517,7 +594,6 @@ async function pollOneTable(name) {
   }
   seenTaskIds[name] = new Set(fresh.map(r => r.id));
   persistSeenIds();
-  recordsCache[name] = fresh;
   maybeRefreshDashboard();
 
   if (state.activeTable === name) {
@@ -3028,7 +3104,7 @@ const resizeState = {
   inspectSeq: 0,
 };
 
-async function openResizeModal(mode = 'resize') {
+async function openResizeModal(mode = 'resize', { chain = false } = {}) {
   if (resizeState.running) {
     document.getElementById('resize-modal').classList.remove('hidden');
     return;
@@ -3065,6 +3141,7 @@ async function openResizeModal(mode = 'resize') {
     resizeState.fitLimit = last.fitLimit !== false;
     resizeState.lastRun = null;
     resizeState.mode = mode;
+    resizeState.finishChain = chain;
     resizeState.tasks = records.map(rec => {
       const name = rec.fields['Name'];
       const pick = pickResizeSource(name, found[sourceName(rec)]);
@@ -3416,6 +3493,11 @@ async function startResize() {
     // The files changed: refresh the "resizes exist" / "over 32 MB" notes.
     inspectResizeTasks();
     refreshTaskFileIndex(true);
+    // Started from Finish: a clean run moves straight on to Autofill.
+    if (s.finishChain) {
+      s.finishChain = false;
+      if (s.lastRun && s.lastRun.done && !s.lastRun.failed && !s.lastRun.cancelled) resizeToAutofill();
+    }
   }
 }
 
@@ -3430,6 +3512,28 @@ function applyResizeProgress(p) {
   if (p.compressed) task.compressed = p.compressed;
   if (p.kept) task.kept = p.kept;
   renderResizeModal();
+}
+
+// Finish: starts at the first step the selection still needs. Resize and
+// Compress hand over to Autofill by themselves when their run succeeds, and
+// Autofill's result window offers To Accept, so one click walks the chain.
+async function finishSelected() {
+  if (!state.selectedIds.size) return;
+  if (!taskFileIndex) await refreshTaskFileIndex(true);
+  const selected = state.records.filter(r => state.selectedIds.has(r.id));
+  const fieldNames = readinessFieldNames();
+  const list = selected.map(r => readinessFor(r, fieldNames)).filter(Boolean);
+  const next = list.length ? stepSummary(list).next : 'autofill';
+  log(`finishSelected: ${selected.length} task(s), starting at ${next}`);
+  if (next === 'resize' || next === 'compress') {
+    await openResizeModal(next, { chain: true });
+  } else if (next === 'autofill') {
+    await openAutofillModal();
+  } else if (next === 'accept') {
+    if (confirm(`Everything is filled. Mark ${selected.length} task(s) as To Accept?`)) await markSelectedAsToAccept();
+  } else {
+    alert('The selected tasks are already handed in.');
+  }
 }
 
 function resizeToAutofill() {
@@ -3447,6 +3551,7 @@ function closeResizeModal() {
     resizeState.cancelling = true;
     window.app.resizeCancel();
   }
+  resizeState.finishChain = false;
   document.getElementById('resize-modal').classList.add('hidden');
 }
 
@@ -3574,6 +3679,7 @@ document.getElementById('task-panel-details-btn').addEventListener('click', () =
 });
 document.getElementById('task-panel-close-btn').addEventListener('click', () => { clearTaskSelection(); render(); });
 document.getElementById('task-panel-copy-brief-btn').addEventListener('click', copyPanelBrief);
+document.getElementById('bulk-finish-btn').addEventListener('click', finishSelected);
 document.getElementById('more-actions-btn').addEventListener('click', e => {
   e.stopPropagation();
   document.getElementById('more-actions-menu').classList.toggle('hidden');

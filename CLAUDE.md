@@ -104,7 +104,7 @@ if (typeof module !== 'undefined' && module.exports) {
 The browser loads it with a `<script>` tag **before `app.js`**, so its functions
 are globals there. Jest `require`s the same file. Add the `<script>` tag in
 `index.html` (current order: notifications-data, dashboard-data, markdown-data,
-drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data, resize-plan, readiness-data, app,
+drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data, resize-plan, readiness-data, records-sync, app,
 canvas-data, canvas) and add `tests/<name>.test.js`.
 
 ### Process boundary
@@ -154,7 +154,8 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   is held **until the response body is read**, because releasing it at
   headers let unlimited bodies stream at once. 429 retries wait **outside**
   the slot. Batched PATCH sends 10 records per call.
-- Loading: the active table loads first, the others preload in parallel.
+- Loading: the active table loads first (from the disk cache when there is
+  one, see "Disk cache + incremental sync"), the others preload in parallel.
   Records are reversed to newest-first. Progress renders are coalesced to one
   every 500 ms (`PROGRESS_RENDER_MS`), because rendering per page was
   quadratic.
@@ -177,7 +178,19 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   after runs) plus the record's fields; it also feeds the table's Ready column.
   A single click opens `#task-panel` on the right: brief (copy), files with
   sizes, fields, and the rename drop zone (moved there from the bottom bar).
-  Double-click still opens the full field editor.
+  Double-click still opens the full field editor. Several selected → the panel
+  lists them all with what each needs. ↑/↓ move through tasks, Shift extends.
+  **▶ Finish** starts at the first step still needed; Resize/Compress opened
+  by it hand over to Autofill on a clean run, and Autofill's result offers To
+  Accept.
+- **Disk cache + incremental sync** (`records-sync.js`, IPC
+  `records-cache-read/write`, `get-records` with `modifiedAfter`): records are
+  stored in `userData/records-cache/<base>_<table>.json`; at startup they show
+  at once, then only records with `LAST_MODIFIED_TIME()` after the last sync
+  (minus 2 min) are fetched and merged in place. Polling does the same. A full
+  download still runs every 6 h and on ⟳, because deletions are invisible to
+  the incremental query. Measured: VCP changes over 24 h = 114 records in 0.5 s
+  vs ~30 s for the full table.
 - **Action bar** (`#bulk-actions-bar`, `updateBulkActionsBar`): shown for one
   or more selected rows. With nothing selected it stays in place, **greyed
   and inactive at the same size** (class `inactive`), so rows never jump. Don't

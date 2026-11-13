@@ -3,7 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('airtable', {
   getBases: () => ipcRenderer.invoke('get-bases'),
   getTables: (baseId) => ipcRenderer.invoke('get-tables', baseId),
-  getRecords: (baseId, tableId, requestId) => ipcRenderer.invoke('get-records', baseId, tableId, requestId),
+  getRecords: (baseId, tableId, requestId, modifiedAfter) =>
+    ipcRenderer.invoke('get-records', baseId, tableId, requestId, modifiedAfter),
   onRecordsProgress: (callback) => {
     const listener = (_e, payload) => callback(payload);
     ipcRenderer.on('records-progress', listener);
@@ -29,6 +30,8 @@ contextBridge.exposeInMainWorld('app', {
   getFileDimensions: (p)           => ipcRenderer.invoke('get-file-dimensions', p),
   renameFile:        (from, to)    => ipcRenderer.invoke('rename-file', from, to),
   log:               (msg)         => ipcRenderer.invoke('log', msg),
+  readRecordsCache:  (key)         => ipcRenderer.invoke('records-cache-read', key),
+  writeRecordsCache: (key, data)   => ipcRenderer.invoke('records-cache-write', key, data),
   getLogPath:        ()            => ipcRenderer.invoke('get-log-path'),
   openExternal:      (url)         => ipcRenderer.invoke('open-external', url),
   copyToClipboard:   (text)        => ipcRenderer.invoke('copy-to-clipboard', text),

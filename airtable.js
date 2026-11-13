@@ -89,7 +89,9 @@ async function fetchTables(apiKey, baseId, logger = noop) {
   return data.tables;
 }
 
-async function fetchRecords(apiKey, baseId, tableId, logger = noop, onPage = noop) {
+// `filterByFormula` (optional) narrows the download, e.g. to records modified
+// since the last sync.
+async function fetchRecords(apiKey, baseId, tableId, logger = noop, onPage = noop, filterByFormula = null) {
   const records = [];
   let offset = null;
   let page = 0;
@@ -97,6 +99,7 @@ async function fetchRecords(apiKey, baseId, tableId, logger = noop, onPage = noo
     page++;
     const url = new URL(`${BASE_URL}/${baseId}/${tableId}`);
     if (offset) url.searchParams.set('offset', offset);
+    if (filterByFormula) url.searchParams.set('filterByFormula', filterByFormula);
     const data = await get(url.toString(), apiKey, logger);
     records.push(...data.records);
     logger(`table=${tableId} page ${page}: +${data.records.length} records (${records.length} total)`);

@@ -285,15 +285,18 @@ ipcMain.handle('get-tables', async (_e, baseId) => {
     throw new Error(`get-tables failed: ${err.message}`);
   }
 });
-ipcMain.handle('get-records', async (event, baseId, tableId, requestId) => {
+// `modifiedAfter` (ISO time, optional): only records changed since then.
+ipcMain.handle('get-records', async (event, baseId, tableId, requestId, modifiedAfter) => {
   const key = getApiKey();
   if (!key) throw new Error('NO_API_KEY');
   const t0 = Date.now();
-  log(`get-records: starting fetch for table=${tableId}`);
+  if (modifiedAfter && !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(modifiedAfter)) throw new Error('Bad modifiedAfter');
+  const formula = modifiedAfter ? `IS_AFTER(LAST_MODIFIED_TIME(), '${modifiedAfter}')` : null;
+  log(`get-records: starting fetch for table=${tableId}${formula ? ` modified after ${modifiedAfter}` : ''}`);
   try {
     const records = await fetchRecords(key, baseId, tableId, log, (newRecords, totalSoFar, page) => {
       event.sender.send('records-progress', { requestId, tableId, page, newRecords, totalSoFar });
-    });
+    }, formula);
     log(`get-records: table=${tableId} got ${records.length} records in ${Date.now() - t0}ms`);
     return records;
   } catch (err) {
@@ -358,6 +361,24 @@ ipcMain.handle('update-records', async (_e, baseId, tableId, records) => {
 });
 
 ipcMain.handle('log', (_e, msg) => log(`[renderer] ${msg}`));
+
+// On-disk copy of each table's records, so the app opens instantly and then
+// only fetches what changed. One JSON file per table in userData/records-cache.
+const recordsCacheDir = path.join(app.getPath('userData'), 'records-cache');
+const cacheFile = key => path.join(recordsCacheDir, `${String(key).replace(/[^A-Za-z0-9_-]/g, '')}.json`);
+
+ipcMain.handle('records-cache-read', async (_e, key) => {
+  try { return JSON.parse(await fs.promises.readFile(cacheFile(key), 'utf8')); }
+  catch { return null; }
+});
+
+ipcMain.handle('records-cache-write', async (_e, key, payload) => {
+  await fs.promises.mkdir(recordsCacheDir, { recursive: true });
+  const file = cacheFile(key);
+  // Temp + rename, so a crash mid-write never leaves a half file behind.
+  await fs.promises.writeFile(`${file}.tmp`, JSON.stringify(payload));
+  await fs.promises.rename(`${file}.tmp`, file);
+});
 ipcMain.handle('get-log-path', () => logFilePath);
 
 
