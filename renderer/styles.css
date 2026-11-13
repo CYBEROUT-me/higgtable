@@ -454,9 +454,11 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 /* The action bar reads left to right in the order the work is done; each step
    shows what is left for the selection, and the next one is outlined. Rare
    actions live in the ⋯ menu. */
-#bulk-actions-bar .step-btn { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 120px; padding: var(--space-1) var(--space-4); line-height: 1.2; text-align: left; }
-.step-btn .step-name { font-size: 12px; font-weight: 600; }
-.step-btn .step-status { font-size: 10px; color: var(--text-secondary); font-weight: 400; }
+/* One line, the same height as an ordinary button: "Resize · 1 need sizes". */
+#bulk-actions-bar .step-btn { display: inline-flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
+.step-btn .step-name { font-weight: 600; }
+.step-btn .step-status { font-size: 11px; color: var(--text-secondary); font-weight: 400; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.step-btn .step-status::before { content: '· '; }
 .step-btn .step-status:empty { display: none; }
 #bulk-actions-bar .step-btn.next { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 #bulk-actions-bar .step-btn.primary .step-status { color: #0d1512; }
@@ -470,6 +472,9 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 
 /* ── Workspace: table + side panel ── */
 #workspace { flex: 1; display: flex; min-height: 0; }
+/* Dashboard, Workload and Canvas hide the table; the wrapper must go with it or
+   it keeps its share of the height and pushes those views down. */
+#workspace:has(> #records-container.hidden) { display: none; }
 #workspace > main { flex: 1; min-width: 0; }
 #task-panel { width: 340px; flex-shrink: 0; margin: var(--space-4) var(--space-4) var(--space-4) 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 #task-panel.hidden { display: none; }
