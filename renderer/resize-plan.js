@@ -11,8 +11,11 @@ const STANDARD_RESIZE_SIZES = {
   '1x1': { width: 1080, height: 1080 },
   '4x5': { width: 1080, height: 1350 },
   '16x9': { width: 1920, height: 1080 },
+  '1.91x1': { width: 1200, height: 628 },
 };
-const STANDARD_RESIZE_ORDER = ['1x1', '4x5', '16x9'];
+const STANDARD_RESIZE_ORDER = ['1x1', '4x5', '16x9', '1.91x1'];
+// Ticked when the dialog opens; 1.91x1 is offered but off by default.
+const DEFAULT_RESIZE_KEYS = ['1x1', '4x5', '16x9'];
 
 // Bounds for a typed custom size. The lower bound rejects typos ("108"), the
 // upper keeps H.264 within what every encoder here accepts.
@@ -302,9 +305,21 @@ function tempPathFor(dir, finalName, sep) {
 // an explicit -f (ffmpeg cannot infer a format from ".resizing"); the caller
 // renames temps over finals only after ffmpeg exits 0.
 //
-// opts: { source, dir, base, info, targets, previews, sourcePreview, platform, sep }
+// The 16x9 can show plain copies of the 9x16 on both sides instead of the
+// blurred background (sides: 'duplicate'): the scaled 9x16 is repeated side by
+// side and the centre 16x9 cropped out, so the middle copy sits exactly where
+// the foreground would. Only when the foreground fills the height.
+function usesDuplicateSides(target, geo, sides) {
+  return sides === 'duplicate' && !target.custom && target.key === '16x9'
+    && geo.fgHeight === geo.height && geo.fgWidth < geo.width;
+}
+
+// opts: { source, dir, base, info, targets, previews, sourcePreview, platform, sep,
+//         sides ('blur' | 'duplicate', default blur), fitLimit (default true) }
 function buildResizePlan(opts) {
   const { source, dir, base, info, targets, previews, sourcePreview, platform } = opts;
+  const sides = opts.sides || 'blur';
+  const fitLimit = opts.fitLimit !== false;
   const sep = opts.sep || '/';
   if (!targets.length) throw new Error('No sizes chosen');
   const W = info.width;
@@ -315,19 +330,38 @@ function buildResizePlan(opts) {
   // when VideoToolbox HEVC wants p010le, which every output then shares.
   const bgPix = encoders[0].pixFmt;
 
+  const geos = targets.map(t => layerGeometry(t, W, H));
+  const dup = targets.map((t, i) => usesDuplicateSides(t, geos[i], sides));
+  const blurred = targets.map((_, i) => i).filter(i => !dup[i]);
+
   const g = [];
-  g.push(sourcePreview ? '[0:v]split=3[fs][bs][ps]' : '[0:v]split=2[fs][bs]');
+  // Every split output must be used, so the blur branch exists only when some
+  // output has a blurred background.
+  const heads = ['[fs]', ...(blurred.length ? ['[bs]'] : []), ...(sourcePreview ? ['[ps]'] : [])];
+  g.push(`[0:v]split=${heads.length}${heads.join('')}`);
   // trim=end_frame=1 on every preview branch: without it the branch processes
   // every frame for a PNG that keeps only the first (~25% slower).
   if (sourcePreview) g.push('[ps]trim=end_frame=1,format=rgb24[psrc]');
-  g.push(`[bs]${backgroundChain(W, H, bgPix)},split=${n}${targets.map((_, i) => `[b${i}]`).join('')}`);
+  if (blurred.length) {
+    g.push(`[bs]${backgroundChain(W, H, bgPix)},split=${blurred.length}${blurred.map(i => `[b${i}]`).join('')}`);
+  }
   g.push(`[fs]split=${n}${targets.map((_, i) => `[f${i}]`).join('')}`);
   targets.forEach((t, i) => {
-    const geo = layerGeometry(t, W, H);
-    // Crop after scaling: cropping in the downscaled space shifts up to 1%.
-    g.push(`[b${i}]scale=${geo.bgWidth}:${geo.bgHeight}:flags=bicubic,crop=${geo.width}:${geo.height}[g${i}]`);
-    g.push(`[f${i}]scale=${geo.fgWidth}:${geo.fgHeight}:flags=lanczos[h${i}]`);
-    const comp = `[g${i}][h${i}]overlay=x=${geo.x}:y=${geo.y}:format=auto,setsar=1,format=${encoders[i].pixFmt}`;
+    const geo = geos[i];
+    let comp;
+    if (dup[i]) {
+      // Odd count, so one copy is centred; enough copies to cover the width.
+      let k = Math.ceil(geo.width / geo.fgWidth);
+      if (k % 2 === 0) k += 1;
+      const copies = Array.from({ length: k }, (_, j) => `[d${i}_${j}]`).join('');
+      g.push(`[f${i}]scale=${geo.fgWidth}:${geo.fgHeight}:flags=lanczos,split=${k}${copies}`);
+      comp = `${copies}hstack=inputs=${k},crop=${geo.width}:${geo.height},setsar=1,format=${encoders[i].pixFmt}`;
+    } else {
+      // Crop after scaling: cropping in the downscaled space shifts up to 1%.
+      g.push(`[b${i}]scale=${geo.bgWidth}:${geo.bgHeight}:flags=bicubic,crop=${geo.width}:${geo.height}[g${i}]`);
+      g.push(`[f${i}]scale=${geo.fgWidth}:${geo.fgHeight}:flags=lanczos[h${i}]`);
+      comp = `[g${i}][h${i}]overlay=x=${geo.x}:y=${geo.y}:format=auto,setsar=1,format=${encoders[i].pixFmt}`;
+    }
     if (previews) {
       g.push(`${comp},split=2[v${i}][pv${i}]`);
       g.push(`[pv${i}]trim=end_frame=1,format=rgb24[p${i}]`);
@@ -346,8 +380,9 @@ function buildResizePlan(opts) {
   };
 
   const copyAudio = MP4_COPYABLE_AUDIO.includes(info.audioCodec);
-  // Source bitrate, capped so every output fits under the 32 MB limit.
-  const bitrate = deliveryVideoBitrate(info);
+  // Source bitrate, capped so every output fits under the 32 MB limit (unless
+  // the user turned that off for this run).
+  const bitrate = fitLimit ? deliveryVideoBitrate(info) : (info.videoBitrate ? Math.trunc(info.videoBitrate) : null);
   targets.forEach((t, i) => {
     const enc = encoders[i];
     const finalName = resizeOutputName(base, t);
@@ -495,7 +530,7 @@ function formatSeconds(s) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    STANDARD_RESIZE_SIZES, STANDARD_RESIZE_ORDER, MAX_REMEMBERED_CUSTOM_SIZES, MP4_COPYABLE_AUDIO,
+    STANDARD_RESIZE_SIZES, STANDARD_RESIZE_ORDER, DEFAULT_RESIZE_KEYS, MAX_REMEMBERED_CUSTOM_SIZES, MP4_COPYABLE_AUDIO,
     MAX_DELIVERY_BYTES, DELIVERY_TARGET_FRACTION, MAX_COMPRESS_ATTEMPTS,
     isOverDeliveryLimit, deliveryVideoBitrate, retryVideoBitrate, buildCompressPlan, isTaskVideoName, formatMB,
     evenSize, standardTarget, parseCustomSize, targetFromKey, resolveTargets, rememberCustomSize,

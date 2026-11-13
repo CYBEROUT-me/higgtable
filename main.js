@@ -535,7 +535,7 @@ function quoteArg(a) {
   return /[\s'"()[\];]/.test(a) ? JSON.stringify(a) : a;
 }
 
-ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
+ipcMain.handle('resize-render', async (event, { tasks, keys, previews, sides, fitLimit = true }) => {
   if (activeResize) throw new Error('A resize is already running');
   const targets = resizePlan.resolveTargets(keys);
   if (!targets.length) throw new Error('No sizes chosen');
@@ -543,8 +543,11 @@ ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
   const ffprobe = resizeBinary('ffprobe');
   const send = payload => { if (!event.sender.isDestroyed()) event.sender.send('resize-progress', payload); };
 
-  // Asked once for the whole batch, about videos only; PNGs are always
-  // overwritten. "Don't render" (also Esc) cancels the whole run.
+  // Asked once for the whole batch, about videos only. "Skip existing" renders
+  // only the sizes that are missing (a hand-made 16x9 stays, and adding one new
+  // size re-renders just that one); its PNG previews are left alone too.
+  // "Don't render" (also Esc) cancels the whole run.
+  let skipExisting = false;
   const existing = (tasks || []).flatMap(task =>
     existingResizeVideos(task, targets).map(t => resizePlan.resizeOutputName(task.base, t)));
   if (existing.length) {
@@ -553,14 +556,16 @@ ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
       type: 'warning',
       message: existing.length === 1 ? 'This resized video already exists' : `${existing.length} resized videos already exist`,
       detail: shown,
-      buttons: ['Overwrite', "Don't render"],
-      defaultId: 1,
-      cancelId: 1,
+      buttons: ['Skip existing', 'Overwrite', "Don't render"],
+      defaultId: 0,
+      cancelId: 2,
     });
-    if (response !== 0) {
+    if (response === 2) {
       log(`resize: declined to overwrite ${existing.length} existing video(s)`);
       return { declined: true };
     }
+    skipExisting = response === 0;
+    log(`resize: ${existing.length} existing video(s) → ${skipExisting ? 'skip' : 'overwrite'}`);
   }
 
   log(`resize: batch of ${tasks.length} task(s), sizes ${targets.map(t => t.key).join(', ')}${previews ? ' + previews' : ''}, ffmpeg=${ffmpeg}`);
@@ -584,29 +589,40 @@ ipcMain.handle('resize-render', async (event, { tasks, keys, previews }) => {
         const dir = path.dirname(task.source);
         // Checked here, right before the run, not when the dialog opened.
         const sourcePreview = !!previews && !fs.existsSync(path.join(dir, resizePlan.sourcePreviewName(task.base)));
-        const plan = resizePlan.buildResizePlan({
-          source: task.source, dir, base: task.base, info, targets, previews: !!previews, sourcePreview,
-          platform: process.platform, sep: path.sep,
-        });
-        log(`resize: ${task.base} ${info.codec} ${info.width}x${info.height} ${info.duration.toFixed(2)}s → encoders ${plan.encoders.join(', ')}`);
-        log(`resize: ffmpeg ${plan.args.map(quoteArg).join(' ')}`);
-        let lastSent = 0;
-        run.job = renderPlan(ffmpeg, plan, info.duration, fraction => {
-          const now = Date.now();
-          if (now - lastSent < 250) return;
-          lastSent = now;
-          send({ id: task.id, state: 'rendering', fraction });
-        });
-        await run.job.finished;
-        run.job = null;
-        log(`resize: ${task.base} rendered in ${((Date.now() - t0) / 1000).toFixed(1)}s (${plan.outputs.length} file(s))`);
+        const kept = skipExisting ? existingResizeVideos(task, targets) : [];
+        const todo = targets.filter(t => !kept.includes(t));
+        let videos = [];
+        if (todo.length) {
+          const plan = resizePlan.buildResizePlan({
+            source: task.source, dir, base: task.base, info, targets: todo, previews: !!previews, sourcePreview,
+            platform: process.platform, sep: path.sep, sides, fitLimit,
+          });
+          log(`resize: ${task.base} ${info.codec} ${info.width}x${info.height} ${info.duration.toFixed(2)}s → ${todo.map(t => t.key).join(', ')}`
+            + `${kept.length ? ` (kept ${kept.map(t => t.key).join(', ')})` : ''}, encoders ${plan.encoders.join(', ')}`);
+          log(`resize: ffmpeg ${plan.args.map(quoteArg).join(' ')}`);
+          let lastSent = 0;
+          run.job = renderPlan(ffmpeg, plan, info.duration, fraction => {
+            const now = Date.now();
+            if (now - lastSent < 250) return;
+            lastSent = now;
+            send({ id: task.id, state: 'rendering', fraction });
+          });
+          await run.job.finished;
+          run.job = null;
+          videos = plan.videos;
+          log(`resize: ${task.base} rendered in ${((Date.now() - t0) / 1000).toFixed(1)}s (${plan.outputs.length} file(s))`);
+        } else {
+          log(`resize: ${task.base} every chosen size exists, kept them`);
+        }
         // The resizes are encoded under the limit already; this catches an
         // encoder overshoot, and the master itself (compressed only now, after
-        // the resizes were made from it at full quality).
-        const compressed = await compressOverLimit(run, task, [...plan.videos, task.source], send, ffmpeg, ffprobe);
+        // the resizes were made from it at full quality). Off when the user
+        // unticked "Fit under 32 MB".
+        const compressed = fitLimit
+          ? await compressOverLimit(run, task, [...videos, task.source], send, ffmpeg, ffprobe) : [];
         const seconds = (Date.now() - t0) / 1000;
         log(`resize: ${task.base} done in ${seconds.toFixed(1)}s`);
-        finish(task.id, 'done', { seconds, fraction: 1, compressed });
+        finish(task.id, 'done', { seconds, fraction: 1, compressed, kept: kept.map(t => t.key) });
       } catch (err) {
         if (err.cancelled) {
           log(`resize: ${task.base} cancelled`);

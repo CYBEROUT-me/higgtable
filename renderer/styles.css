@@ -442,3 +442,8 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 #autofill-hours-note { color: var(--text-muted); font-size: 11px; }
 #autofill-hours-row select, .autofill-hours-select { background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: 12px; }
 .autofill-hours-line { cursor: default; }
+/* Custom sizes can be forgotten: an × appears on hover. */
+.resize-chip-remove { display: none; margin-left: var(--space-2); padding: 0 var(--space-1); border-radius: 999px; color: var(--text-muted); }
+.resize-chip.removable:hover:not(:disabled) .resize-chip-remove { display: inline; }
+.resize-chip-remove:hover { color: #f66; background: rgba(255, 102, 102, 0.15); }
+#autofill-done-summary { white-space: pre-line; }

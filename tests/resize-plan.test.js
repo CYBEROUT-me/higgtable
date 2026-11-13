@@ -22,7 +22,13 @@ describe('delivery sizes', () => {
       '1x1': { width: 1080, height: 1080 },
       '4x5': { width: 1080, height: 1350 },
       '16x9': { width: 1920, height: 1080 },
+      '1.91x1': { width: 1200, height: 628 },
     });
+  });
+
+  test('1.91x1 is a standard size named by its ratio, using plain cover/contain', () => {
+    expect(resizeOutputName('X', standardTarget('1.91x1'))).toBe('X_1.91x1.mp4');
+    expect(layerGeometry(standardTarget('1.91x1'), 1080, 1920)).toMatchObject({ fgWidth: 354, fgHeight: 628, x: 423 });
   });
 
   test('custom sizes are exact pixels, rounded to even numbers', () => {
@@ -438,5 +444,40 @@ describe('isTaskVideoName', () => {
   test('regex characters in the base are literal', () => {
     expect(isTaskVideoName('A.B(1)', 'A.B(1)_1x1.mp4')).toBe(true);
     expect(isTaskVideoName('A.B(1)', 'AxB(1)_1x1.mp4')).toBe(false);
+  });
+});
+
+describe('16x9 with duplicated sides', () => {
+  const plan = (targets, over = {}) => buildResizePlan({
+    source: '/w/X_9x16.mp4', dir: '/w', base: 'X', info: SOURCE_INFO, targets: targets.map(standardTarget),
+    previews: false, sourcePreview: false, platform: 'darwin', sep: '/', sides: 'duplicate', ...over,
+  });
+  const graphOf = p => p.args[p.args.indexOf('-filter_complex') + 1].split(';');
+
+  test('the 16x9 tiles five copies of the 608x1080 foreground and crops the centre', () => {
+    expect(graphOf(plan(['16x9']))).toEqual([
+      '[0:v]split=1[fs]',
+      '[fs]split=1[f0]',
+      '[f0]scale=608:1080:flags=lanczos,split=5[d0_0][d0_1][d0_2][d0_3][d0_4]',
+      '[d0_0][d0_1][d0_2][d0_3][d0_4]hstack=inputs=5,crop=1920:1080,setsar=1,format=yuv420p[v0]',
+    ]);
+  });
+
+  test('other sizes keep the blurred background, computed only for them', () => {
+    const g = graphOf(plan(['1x1', '16x9']));
+    expect(g[0]).toBe('[0:v]split=2[fs][bs]');
+    expect(g[1]).toMatch(/^\[bs\].*split=1\[b0\]$/);
+    expect(g.some(x => x.startsWith('[b1]'))).toBe(false);
+  });
+});
+
+describe('fitLimit off', () => {
+  test('outputs keep the source bitrate even when that would exceed 32 MB', () => {
+    const long = { ...SOURCE_INFO, duration: 60 };
+    const p = buildResizePlan({
+      source: '/w/X_9x16.mp4', dir: '/w', base: 'X', info: long, targets: [standardTarget('1x1')],
+      previews: false, sourcePreview: false, platform: 'darwin', sep: '/', fitLimit: false,
+    });
+    expect(p.args[p.args.indexOf('-b:v') + 1]).toBe('12804800');
   });
 });

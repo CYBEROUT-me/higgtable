@@ -251,3 +251,23 @@ test('pruneDeadlineAlertKeys drops keys whose deadline has passed', () => {
   const keys = ['T|a|2026-10-28', 'T|b|2026-10-29', 'T|c|2026-10-31'];
   expect(pruneDeadlineAlertKeys(keys, '2026-10-29')).toEqual(['T|b|2026-10-29', 'T|c|2026-10-31']);
 });
+
+describe('dropCompletedDeadlineAlerts', () => {
+  const { dropCompletedDeadlineAlerts } = require('../renderer/notifications-data');
+  const recs = {
+    a: { id: 'a', fields: { Status: 'To accept' } },
+    b: { id: 'b', fields: { Status: 'Done' } },
+    c: { id: 'c', fields: { Status: 'In work' } },
+  };
+  const find = n => recs[n.recordId];
+  const list = [
+    { kind: 'deadline', recordId: 'a' }, { kind: 'deadline', recordId: 'b' },
+    { kind: 'deadline', recordId: 'c' }, { kind: 'deadline', recordId: 'gone' },
+    { recordId: 'a' },
+  ];
+  test('drops alerts of tasks in To accept or Done, keeps everything else', () => {
+    expect(dropCompletedDeadlineAlerts(list, find)).toEqual([
+      { kind: 'deadline', recordId: 'c' }, { kind: 'deadline', recordId: 'gone' }, { recordId: 'a' },
+    ]);
+  });
+});

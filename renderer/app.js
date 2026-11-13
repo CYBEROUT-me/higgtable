@@ -683,7 +683,20 @@ function loadDeadlineAlertKeys() {
 // due in 1-2 days, once per task per deadline. Runs after the initial load,
 // after every poll cycle (which also catches a task crossing into the window
 // overnight), and when the designer picker changes.
+// Removes deadline alerts whose task has since moved to To accept or Done.
+// Runs on every poll (via checkDeadlineAlerts) and after the bulk status buttons.
+function pruneCompletedDeadlineAlerts() {
+  const kept = dropCompletedDeadlineAlerts(notifications,
+    n => (recordsCache[n.tableName] || []).find(r => r.id === n.recordId));
+  if (kept.length === notifications.length) return;
+  notifications = kept;
+  persistNotifications();
+  renderNotificationBell();
+  renderNotificationDropdown();
+}
+
 function checkDeadlineAlerts() {
+  pruneCompletedDeadlineAlerts();
   if (!state.selectedDES) return;
   const today = toISO(new Date());
   const keys = pruneDeadlineAlertKeys(loadDeadlineAlertKeys(), today);
@@ -895,6 +908,7 @@ async function markSelectedAs(status, { btnId, label }) {
       if (updated) rec.fields = updated.fields;
     });
     log(`markSelectedAs: updated ${results.length} record(s) to ${status}`);
+    pruneCompletedDeadlineAlerts();
     state.selectedIds.clear();
     clearTaskSelection();
     render();
@@ -2684,6 +2698,7 @@ async function confirmAutofill() {
     [...uploadedOk, ...toSetTiming, ...toSetHours, ...statCandidates, ...linkPairs.map(p => p.task.candidate)]
       .forEach(c => addFields(c, { 'Date Done': today }));
 
+    let writtenIds = [];
     if (pending.size && tableInfo) {
       const entries = [...pending.values()];
       try {
@@ -2701,6 +2716,7 @@ async function confirmAutofill() {
         creativeLinked = linkPairs.length;
         hoursSet = toSetHours.length;
         dated = entries.length;
+        writtenIds = entries.map(e => e.c.rec.id);
         log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, Hours ${hoursSet}, ${FIGMA_LINK_FIELD} ${linked}, ${CREATIVE_LINK_FIELD} ${creativeLinked}, Date Done ${dated}`);
       } catch (err) {
         log(`confirmAutofill: batched update FAILED — ${err.message}`);
@@ -2719,12 +2735,33 @@ async function confirmAutofill() {
       creativeLinked ? `${CREATIVE_LINK_FIELD} set: ${creativeLinked}` : null,
       `Date Done set: ${dated}`,
     ].filter(Boolean);
-    alert(`Autofill done.\n\n${lines.join('\n')}`);
+    showAutofillDone(lines, writtenIds);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Apply Selected';
     closeAutofillModal();
   }
+}
+
+// The usual next step after Autofill is handing the work in, so the result
+// dialog offers it directly for the records Autofill actually wrote.
+let autofillDoneIds = [];
+
+function showAutofillDone(lines, writtenIds) {
+  autofillDoneIds = writtenIds.filter(id => state.records.some(r => r.id === id && r.fields['Status'] !== 'To accept'));
+  document.getElementById('autofill-done-summary').textContent = lines.join('\n');
+  const btn = document.getElementById('autofill-done-accept-btn');
+  btn.textContent = `Mark ${autofillDoneIds.length} as To Accept`;
+  btn.classList.toggle('hidden', !autofillDoneIds.length);
+  document.getElementById('autofill-done-modal').classList.remove('hidden');
+}
+
+async function markAutofilledAsToAccept() {
+  document.getElementById('autofill-done-modal').classList.add('hidden');
+  if (!autofillDoneIds.length) return;
+  state.selectedIds = new Set(autofillDoneIds);
+  autofillDoneIds = [];
+  await markSelectedAsToAccept();
 }
 
 // ── Video resizer ─────────────────────────────────────────────────────────
@@ -2744,6 +2781,8 @@ const resizeState = {
   selected: new Set(),  // ticked size keys
   custom: [],           // remembered custom keys, most recent first
   previews: true,
+  sides: 'blur',        // 16x9 background: 'blur' | 'duplicate'
+  fitLimit: true,       // keep every video under 32 MB
   running: false,
   cancelling: false,
   lastRun: null,        // counts after a run, until the sizes change
@@ -2777,8 +2816,10 @@ async function openResizeModal(mode = 'resize') {
       window.app.getSettings(),
     ]);
     resizeState.custom = (settings.resizeCustomSizes || []).filter(k => targetFromKey(k));
-    resizeState.selected = new Set(STANDARD_RESIZE_ORDER);
+    resizeState.selected = new Set(DEFAULT_RESIZE_KEYS);
     resizeState.previews = true;
+    resizeState.sides = 'blur';
+    resizeState.fitLimit = true;
     resizeState.lastRun = null;
     resizeState.mode = mode;
     resizeState.tasks = records.map(rec => {
@@ -2889,9 +2930,9 @@ function renderResizeModal() {
   // Chips: standard sizes, remembered custom sizes, then PNG previews.
   const chips = document.getElementById('resize-chips');
   chips.innerHTML = '';
-  const addChip = (key, label, detail, on) => {
+  const addChip = (key, label, detail, on, removable = false) => {
     const chip = document.createElement('button');
-    chip.className = 'resize-chip' + (on ? ' on' : '');
+    chip.className = 'resize-chip' + (on ? ' on' : '') + (removable ? ' removable' : '');
     chip.dataset.key = key;
     chip.disabled = s.running;
     chip.textContent = (on ? '✓ ' : '') + label;
@@ -2900,14 +2941,23 @@ function renderResizeModal() {
       small.textContent = detail;
       chip.appendChild(small);
     }
+    if (removable) {
+      const x = document.createElement('span');
+      x.className = 'resize-chip-remove';
+      x.textContent = '×';
+      x.title = 'Forget this size';
+      chip.appendChild(x);
+    }
     chips.appendChild(chip);
   };
   STANDARD_RESIZE_ORDER.forEach(key => {
     const { width, height } = STANDARD_RESIZE_SIZES[key];
     addChip(key, key, `${width}×${height}`, s.selected.has(key));
   });
-  s.custom.forEach(key => addChip(key, key.replace('x', '×'), 'custom', s.selected.has(key)));
+  s.custom.forEach(key => addChip(key, key.replace('x', '×'), 'custom', s.selected.has(key), true));
   addChip('png', 'PNG previews', null, s.previews);
+  addChip('dup', '16x9: duplicate sides', 'instead of blur', s.sides === 'duplicate');
+  addChip('fit', 'Fit under 32 MB', null, s.fitLimit);
   ['resize-custom-w', 'resize-custom-h', 'resize-custom-add']
     .forEach(id => { document.getElementById(id).disabled = s.running; });
 
@@ -2966,7 +3016,8 @@ function renderResizeModal() {
     else if (task.state === 'compressing') text.textContent = `compressing ${task.label} ${Math.round(task.fraction * 100)}%`;
     else if (task.state === 'done') {
       const c = describeCompressed(task.compressed);
-      text.textContent = `done ${formatSeconds(task.seconds || 0)}${c.text}`;
+      const kept = task.kept && task.kept.length ? ` · kept ${task.kept.join(', ')}` : '';
+      text.textContent = `done ${formatSeconds(task.seconds || 0)}${kept}${c.text}`;
       text.title = c.title;
       text.className = 'ok';
     }
@@ -3012,11 +3063,23 @@ function renderResizeModal() {
 function toggleResizeChip(key) {
   if (resizeState.running) return;
   if (key === 'png') resizeState.previews = !resizeState.previews;
+  else if (key === 'dup') resizeState.sides = resizeState.sides === 'duplicate' ? 'blur' : 'duplicate';
+  else if (key === 'fit') resizeState.fitLimit = !resizeState.fitLimit;
   else if (resizeState.selected.has(key)) resizeState.selected.delete(key);
   else resizeState.selected.add(key);
   resizeState.lastRun = null;
   renderResizeModal();
-  if (key !== 'png') inspectResizeSources();
+  if (!['png', 'dup', 'fit'].includes(key)) inspectResizeSources();
+}
+
+async function removeResizeCustomSize(key) {
+  if (resizeState.running) return;
+  resizeState.custom = resizeState.custom.filter(k => k !== key);
+  resizeState.selected.delete(key);
+  resizeState.lastRun = null;
+  renderResizeModal();
+  inspectResizeSources();
+  await window.app.saveSettings({ resizeCustomSizes: resizeState.custom });
 }
 
 async function addResizeCustomSize() {
@@ -3060,6 +3123,7 @@ async function startResize() {
     t.seconds = null;
     t.error = null;
     t.compressed = null;
+    t.kept = null;
   });
   s.running = true;
   s.cancelling = false;
@@ -3072,7 +3136,7 @@ async function startResize() {
     const tasks = runnable.map(t => ({ id: t.id, base: t.base, source: t.source }));
     const res = compress
       ? await window.app.compressRender({ tasks })
-      : await window.app.resizeRender({ tasks, keys, previews: s.previews });
+      : await window.app.resizeRender({ tasks, keys, previews: s.previews, sides: s.sides, fitLimit: s.fitLimit });
     if (res.declined) {
       s.tasks.forEach(t => { t.state = null; });
     } else {
@@ -3104,6 +3168,7 @@ function applyResizeProgress(p) {
   if (p.error) task.error = p.error;
   if (p.label) task.label = p.label;
   if (p.compressed) task.compressed = p.compressed;
+  if (p.kept) task.kept = p.kept;
   renderResizeModal();
 }
 
@@ -3216,9 +3281,15 @@ document.getElementById('bulk-compress-btn').addEventListener('click', () => {
 });
 document.getElementById('resize-chips').addEventListener('click', e => {
   const chip = e.target.closest('.resize-chip');
-  if (chip && !chip.disabled) toggleResizeChip(chip.dataset.key);
+  if (!chip || chip.disabled) return;
+  if (e.target.closest('.resize-chip-remove')) removeResizeCustomSize(chip.dataset.key);
+  else toggleResizeChip(chip.dataset.key);
 });
 document.getElementById('resize-custom-add').addEventListener('click', addResizeCustomSize);
+document.getElementById('autofill-done-accept-btn').addEventListener('click', markAutofilledAsToAccept);
+document.getElementById('autofill-done-close-btn').addEventListener('click', () => {
+  document.getElementById('autofill-done-modal').classList.add('hidden');
+});
 ['resize-custom-w', 'resize-custom-h'].forEach(id => {
   document.getElementById(id).addEventListener('keydown', e => {
     if (e.key === 'Enter') addResizeCustomSize();

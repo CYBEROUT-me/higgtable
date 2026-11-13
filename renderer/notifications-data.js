@@ -164,9 +164,22 @@ function markAllRead(list) {
   return list.map(n => (n.read ? n : { ...n, read: true }));
 }
 
+// A deadline alert is only useful while the task is still open: once the task
+// is in To accept or Done, its alert is dropped from the list. `findRecord`
+// returns the live record for a notification, or falsy when its table is not
+// loaded yet (kept: hiding a real alert is worse than a stale one for a moment).
+function dropCompletedDeadlineAlerts(list, findRecord) {
+  return list.filter(n => {
+    if (n.kind !== 'deadline') return true;
+    const rec = findRecord(n);
+    return !(rec && COMPLETED_STATUSES.includes(rec.fields['Status'] || ''));
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAX_NOTIFICATIONS,
+    dropCompletedDeadlineAlerts,
     COMPLETED_STATUSES,
     recordToNotification,
     computeDeadlineUrgency,
