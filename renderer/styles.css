@@ -449,3 +449,42 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 #autofill-done-summary { white-space: pre-line; }
 .resize-row-folder { background: none; border: none; cursor: pointer; padding: 0 var(--space-2) 0 0; font-size: 11px; opacity: 0.7; }
 .resize-row-folder:hover { opacity: 1; }
+
+/* ── Workflow step bar ── */
+/* The action bar reads left to right in the order the work is done; each step
+   shows what is left for the selection, and the next one is outlined. Rare
+   actions live in the ⋯ menu. */
+#bulk-actions-bar .step-btn { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 120px; padding: var(--space-1) var(--space-4); line-height: 1.2; text-align: left; }
+.step-btn .step-name { font-size: 12px; font-weight: 600; }
+.step-btn .step-status { font-size: 10px; color: var(--text-secondary); font-weight: 400; }
+.step-btn .step-status:empty { display: none; }
+#bulk-actions-bar .step-btn.next { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+#bulk-actions-bar .step-btn.primary .step-status { color: #0d1512; }
+.step-arrow { color: var(--text-muted); }
+#more-actions { position: relative; margin-left: auto; }
+#more-actions-btn { padding: var(--space-1) var(--space-4); font-size: 14px; }
+#more-actions-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 50; display: flex; flex-direction: column; min-width: 200px; background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-modal); padding: var(--space-1); }
+#more-actions-menu.hidden { display: none; }
+#more-actions-menu button { text-align: left; background: none; border: none; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); color: var(--text-primary); cursor: pointer; font-size: 12px; }
+#more-actions-menu button:hover { background: var(--accent-bg); }
+
+/* ── Workspace: table + side panel ── */
+#workspace { flex: 1; display: flex; min-height: 0; }
+#workspace > main { flex: 1; min-width: 0; }
+#task-panel { width: 340px; flex-shrink: 0; margin: var(--space-4) var(--space-4) var(--space-4) 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+#task-panel.hidden { display: none; }
+#task-panel-header { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+#task-panel-title { flex: 1; min-width: 0; font-family: monospace; font-size: 11px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#task-panel-header button, .task-panel-label button { background: none; border: 1px solid transparent; color: var(--text-secondary); cursor: pointer; border-radius: var(--radius-sm); padding: 2px var(--space-2); font-size: 12px; }
+#task-panel-header button:hover, .task-panel-label button:hover { border-color: var(--border-strong); color: var(--text-primary); }
+#task-panel-body { flex: 1; overflow-y: auto; padding: var(--space-2) var(--space-4) var(--space-4); }
+.task-panel-label { display: flex; align-items: center; justify-content: space-between; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: var(--space-4) 0 var(--space-2); }
+#task-panel-brief { font-size: 12px; line-height: 1.5; color: var(--text-primary); white-space: pre-wrap; max-height: 220px; overflow-y: auto; }
+#task-panel-brief.muted { color: var(--text-muted); }
+.task-panel-line { display: flex; justify-content: space-between; gap: var(--space-3); font-size: 12px; padding: 2px 0; color: var(--text-secondary); }
+.task-panel-line .ok, .ready-cell.ok { color: var(--accent); }
+.task-panel-line .warn, .ready-cell.warn { color: #e0a43a; }
+.task-panel-line .bad { color: #f66; }
+.ready-cell.muted { color: var(--text-muted); }
+#task-panel #rename-panel { border-top: 1px solid var(--border); max-height: none; flex-shrink: 0; }
+#task-panel #rename-header { display: none; }

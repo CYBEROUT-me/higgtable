@@ -104,7 +104,7 @@ if (typeof module !== 'undefined' && module.exports) {
 The browser loads it with a `<script>` tag **before `app.js`**, so its functions
 are globals there. Jest `require`s the same file. Add the `<script>` tag in
 `index.html` (current order: notifications-data, dashboard-data, markdown-data,
-drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data, resize-plan, app,
+drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data, resize-plan, readiness-data, app,
 canvas-data, canvas) and add `tests/<name>.test.js`.
 
 ### Process boundary
@@ -168,6 +168,16 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
 - **Table view** (`render()`): status chips, a designer picker ("You:"),
   sortable columns, a column chooser, Airtable select colours. Click selects
   one row; Cmd/Ctrl-click toggles; Shift-click selects a range.
+- **Step bar + side panel** (branch `ui-redesign`): the action bar reads as the
+  workflow, Resize › Compress › Autofill › To Accept, each step showing what is
+  left for the selection (`renderStepButtons`); the next step is outlined. Rare
+  actions (Mark as In Work, Copy name, Copy name + brief, Clear) sit in the ⋯
+  menu. "Ready" is computed in `readiness-data.js` from one walk of the working
+  directory (`index-task-files` IPC, refreshed on focus at most every 30 s and
+  after runs) plus the record's fields; it also feeds the table's Ready column.
+  A single click opens `#task-panel` on the right: brief (copy), files with
+  sizes, fields, and the rename drop zone (moved there from the bottom bar).
+  Double-click still opens the full field editor.
 - **Action bar** (`#bulk-actions-bar`, `updateBulkActionsBar`): shown for one
   or more selected rows. With nothing selected it stays in place, **greyed
   and inactive at the same size** (class `inactive`), so rows never jump. Don't

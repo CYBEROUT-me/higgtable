@@ -215,6 +215,7 @@ async function boot() {
   log('boot: checking for API key');
   const settings = await window.app.getSettings();
   state.workingDirectory = settings.workingDirectory || '';
+  refreshTaskFileIndex(true);
   state.autoFixRatio = settings.autoFixRatio === true;
   state.driveAccountIndex = settings.driveAccountIndex || '';
   const hasKey = await window.app.hasApiKey();
@@ -809,10 +810,13 @@ function render() {
   const table = document.createElement('table');
   const hr = table.createTHead().insertRow();
 
-  ['#', ...cols].forEach(name => {
+  const showReady = !!taskFileIndex;
+  const readyFieldNames = readinessFieldNames();
+  ['#', ...cols, ...(showReady ? ['Ready'] : [])].forEach(name => {
     const th = document.createElement('th');
-    if (name === '#') {
-      th.textContent = '#';
+    if (name === '#' || name === 'Ready') {
+      th.textContent = name;
+      if (name === 'Ready') th.title = 'What is left before this task can be handed in (files in the working directory + fields)';
     } else {
       const isSorted = state.sortCol === name;
       th.textContent = name + (isSorted ? (state.sortDir === 'asc' ? ' ↑' : ' ↓') : '');
@@ -860,6 +864,15 @@ function render() {
       td.textContent = val == null ? '' : Array.isArray(val) ? val.join(', ') : String(val);
       if (col === 'Name') td.title = String(val || '');
     });
+    if (showReady) {
+      const td = tr.insertCell();
+      const r = readinessFor(rec, readyFieldNames);
+      if (r) {
+        td.textContent = readinessLabel(r);
+        td.className = `ready-cell ${r.handedIn ? 'muted' : r.ready ? 'ok' : 'warn'}`;
+        td.title = r.handedIn ? '' : r.missing.map(i => i.label).join('\n');
+      }
+    }
   });
 
   container.innerHTML = '';
@@ -880,6 +893,138 @@ function updateBulkActionsBar() {
   const count = state.selectedIds.size;
   bar.classList.toggle('inactive', count === 0);
   document.getElementById('bulk-actions-count').textContent = `${count} selected`;
+  renderStepButtons();
+}
+
+// ── Readiness: files on disk + fields, for the step bar, Ready column, panel ──
+// One walk of the working directory, refreshed on focus (at most every 30 s),
+// after Resize/Compress/Autofill and when the folder changes.
+
+let taskFileIndex = null;
+let taskFileIndexAt = 0;
+let taskFileIndexBusy = false;
+
+async function refreshTaskFileIndex(force = false) {
+  if (!state.workingDirectory || taskFileIndexBusy) return;
+  if (!force && Date.now() - taskFileIndexAt < 30000) return;
+  taskFileIndexBusy = true;
+  try {
+    taskFileIndex = buildFileIndex(await window.app.indexTaskFiles(state.workingDirectory));
+    taskFileIndexAt = Date.now();
+    render();
+    renderTaskPanel();
+  } catch (err) {
+    log(`refreshTaskFileIndex: FAILED — ${err.message}`);
+  } finally {
+    taskFileIndexBusy = false;
+  }
+}
+
+function readinessFieldNames() {
+  const names = (state.tables[state.activeTable]?.fields || []).map(f => f.name);
+  return {
+    creativeLink: resolveFieldName(names, CREATIVE_LINK_FIELD) || CREATIVE_LINK_FIELD,
+    figmaLink: resolveFieldName(names, FIGMA_LINK_FIELD) || FIGMA_LINK_FIELD,
+  };
+}
+
+function readinessFor(rec, fieldNames = readinessFieldNames()) {
+  if (!taskFileIndex || !rec.fields['Name']) return null;
+  return taskReadiness(rec, taskFiles(stripAspectRatio(rec.fields['Name']), taskFileIndex), fieldNames);
+}
+
+const STEP_LABELS = { resize: 'Resize', compress: 'Compress', autofill: 'Autofill', accept: 'To Accept' };
+
+// Each step button shows its name and, for the selection, what is left there.
+// The first step with work left is outlined. Buttons busy with their own
+// "Searching..." text are left alone until they finish.
+function renderStepButtons() {
+  const selected = state.records.filter(r => state.selectedIds.has(r.id));
+  const fieldNames = readinessFieldNames();
+  const list = selected.map(r => readinessFor(r, fieldNames)).filter(Boolean);
+  const sum = list.length ? stepSummary(list) : null;
+  const statusText = {
+    resize: sum && (sum.resize ? `${sum.resize} need sizes` : 'sizes ✓'),
+    compress: sum && (sum.compress ? `${sum.compress} over 32 MB` : 'under 32 MB ✓'),
+    autofill: sum && (sum.autofill
+      ? `missing ${sum.autofillFields.slice(0, 2).join(', ')}${sum.autofillFields.length > 2 ? '…' : ''}`
+      : 'filled ✓'),
+    accept: sum && (sum.accept ? `${sum.accept} to hand in` : 'handed in ✓'),
+  };
+  document.querySelectorAll('#bulk-actions-bar .step-btn').forEach(btn => {
+    if (btn.disabled) return;
+    const step = btn.dataset.step;
+    const name = document.createElement('span');
+    name.className = 'step-name';
+    name.textContent = STEP_LABELS[step];
+    const status = document.createElement('span');
+    status.className = 'step-status';
+    status.textContent = statusText[step] || '';
+    btn.replaceChildren(name, status);
+    btn.classList.toggle('next', !!sum && sum.next === step);
+    btn.classList.toggle('primary', step === 'accept' && !!sum && sum.next === 'accept');
+  });
+}
+
+// ── Side panel ───────────────────────────────────────────────────────────
+// One click on a task shows its brief, files and fields here; the rename drop
+// zone lives at its bottom. Double-click still opens the full field editor.
+
+function renderTaskPanel() {
+  const panel = document.getElementById('task-panel');
+  const rec = state.selectedTask;
+  panel.classList.toggle('hidden', !rec);
+  if (!rec) return;
+  const name = rec.fields['Name'] || '';
+  document.getElementById('task-panel-title').textContent = name;
+  document.getElementById('task-panel-title').title = name;
+  const brief = briefFromDescription(rec.fields['Description']);
+  const briefEl = document.getElementById('task-panel-brief');
+  briefEl.textContent = brief || 'No brief';
+  briefEl.classList.toggle('muted', !brief);
+
+  const line = (label, value, cls) => {
+    const row = document.createElement('div');
+    row.className = 'task-panel-line';
+    const a = document.createElement('span');
+    a.textContent = label;
+    const b = document.createElement('span');
+    b.textContent = value;
+    if (cls) b.className = cls;
+    row.append(a, b);
+    return row;
+  };
+  const filesEl = document.getElementById('task-panel-files');
+  const fieldsEl = document.getElementById('task-panel-fields');
+  filesEl.replaceChildren();
+  fieldsEl.replaceChildren();
+  if (!taskFileIndex) {
+    filesEl.append(line(state.workingDirectory ? 'Scanning…' : 'No working directory set', ''));
+  } else if (!isStatTask(rec)) {
+    const files = taskFiles(stripAspectRatio(name), taskFileIndex);
+    files.videos.forEach(v => {
+      if (v.bytes == null) filesEl.append(line(`${v.label}.mp4`, 'missing', 'bad'));
+      else filesEl.append(line(`${v.label}.mp4`, formatMB(v.bytes), v.bytes > READY_LIMIT_BYTES ? 'warn' : 'ok'));
+    });
+    filesEl.append(line('1x1 preview image', files.preview ? 'found' : 'missing', files.preview ? 'ok' : 'bad'));
+  } else {
+    filesEl.append(line('Stat task', 'no videos needed'));
+  }
+  const r = readinessFor(rec);
+  (r ? r.items.filter(i => i.step === 'autofill') : []).forEach(i => {
+    fieldsEl.append(line(i.label, i.done ? 'set' : 'empty', i.done ? 'ok' : 'warn'));
+  });
+  if (r && r.handedIn) fieldsEl.append(line('Status', rec.fields['Status'], 'ok'));
+}
+
+async function copyPanelBrief() {
+  const rec = state.selectedTask;
+  const brief = rec && briefFromDescription(rec.fields['Description']);
+  const btn = document.getElementById('task-panel-copy-brief-btn');
+  if (!brief) return;
+  await window.app.copyToClipboard(brief);
+  btn.textContent = '✓ Copied';
+  setTimeout(() => { btn.textContent = '⧉ Copy'; }, 1200);
 }
 
 // Both bulk status actions differ only in the target status, the button they
@@ -918,6 +1063,7 @@ async function markSelectedAs(status, { btnId, label }) {
     log(`markSelectedAs(${status}): FAILED — ${err.message}`);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = label; }
+    updateBulkActionsBar();
   }
 }
 
@@ -1301,8 +1447,7 @@ function openRecordModal(rec, tableName) {
   document.getElementById('record-modal').classList.remove('hidden');
 }
 
-async function openCurrentTaskFolder() {
-  const rec = currentDetailRecord;
+async function openCurrentTaskFolder(rec = currentDetailRecord) {
   const name = rec && rec.fields['Name'];
   if (!name) return;
   if (!state.workingDirectory) { alert('Set a working directory first (⚙ Settings).'); return; }
@@ -1987,6 +2132,7 @@ function openRenamePanel(rec) {
   document.getElementById('rename-panel').classList.remove('hidden');
   state.pendingFiles = [];
   renderFileList();
+  renderTaskPanel();
 }
 
 function clearTaskSelection() {
@@ -1995,6 +2141,7 @@ function clearTaskSelection() {
   document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
   document.getElementById('rename-panel').classList.add('hidden');
   state.pendingFiles = [];
+  renderTaskPanel();
 }
 
 function stripAspectRatio(name) {
@@ -2326,6 +2473,7 @@ async function openAutofillModal() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Autofill';
+    updateBulkActionsBar();
   }
 }
 
@@ -2745,6 +2893,7 @@ async function confirmAutofill() {
       `Date Done set: ${dated}`,
     ].filter(Boolean);
     showAutofillDone(lines, writtenIds);
+    renderTaskPanel();
   } finally {
     btn.disabled = false;
     btn.textContent = 'Apply Selected';
@@ -2859,6 +3008,7 @@ async function openResizeModal(mode = 'resize') {
   } finally {
     btn.disabled = false;
     btn.textContent = btnLabel;
+    updateBulkActionsBar();
   }
 }
 
@@ -3184,6 +3334,7 @@ async function startResize() {
     renderResizeModal();
     // The files changed: refresh the "resizes exist" / "over 32 MB" notes.
     inspectResizeTasks();
+    refreshTaskFileIndex(true);
   }
 }
 
@@ -3335,7 +3486,24 @@ document.getElementById('autofill-done-close-btn').addEventListener('click', () 
 document.getElementById('resize-render-btn').addEventListener('click', startResize);
 document.getElementById('resize-close-btn').addEventListener('click', closeResizeModal);
 document.getElementById('resize-autofill-btn').addEventListener('click', resizeToAutofill);
-document.getElementById('open-folder-btn').addEventListener('click', openCurrentTaskFolder);
+document.getElementById('open-folder-btn').addEventListener('click', () => openCurrentTaskFolder());
+document.getElementById('task-panel-folder-btn').addEventListener('click', () => openCurrentTaskFolder(state.selectedTask));
+document.getElementById('task-panel-details-btn').addEventListener('click', () => {
+  if (state.selectedTask) openRecordModal(state.selectedTask, state.activeTable);
+});
+document.getElementById('task-panel-close-btn').addEventListener('click', () => { clearTaskSelection(); render(); });
+document.getElementById('task-panel-copy-brief-btn').addEventListener('click', copyPanelBrief);
+document.getElementById('more-actions-btn').addEventListener('click', e => {
+  e.stopPropagation();
+  document.getElementById('more-actions-menu').classList.toggle('hidden');
+});
+document.getElementById('more-actions-menu').addEventListener('click', () => {
+  document.getElementById('more-actions-menu').classList.add('hidden');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#more-actions')) document.getElementById('more-actions-menu').classList.add('hidden');
+});
+window.addEventListener('focus', () => refreshTaskFileIndex());
 document.getElementById('resize-task-list').addEventListener('click', e => {
   const btn = e.target.closest('.resize-row-folder');
   if (btn) window.app.revealFile(btn.dataset.path);
@@ -3441,6 +3609,7 @@ document.getElementById('browse-dir-btn').addEventListener('click', async () => 
   const dir = await window.app.pickDirectory();
   if (!dir) return;
   state.workingDirectory = dir;
+  refreshTaskFileIndex(true);
   document.getElementById('working-dir-input').value = dir;
   await window.app.saveSettings({ workingDirectory: dir });
   log(`browse-dir-btn: working directory set to ${dir}`);

@@ -751,6 +751,29 @@ ipcMain.handle('open-task-folder', (_e, dir, taskName, base) => {
   return null;
 });
 
+// One walk of the working directory for the step bar, Ready column and side
+// panel: every "<name>_<ratio|WxH>.(mp4|png|jpg|jpeg)" with its size, as
+// [lowercased name, bytes, path]. Folders AE collects footage into are walked
+// too; the renderer keeps the first hit per name.
+const TASK_FILE_RE = /_\d+(?:\.\d+)?x\d+\.(mp4|png|jpe?g)$/i;
+ipcMain.handle('index-task-files', (_e, dir) => {
+  const t0 = Date.now();
+  const out = [];
+  const walk = d => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!TASK_FILE_RE.test(entry.name)) continue;
+      try { out.push([entry.name.toLowerCase(), fs.statSync(full).size, full]); } catch {}
+    }
+  };
+  if (dir) walk(dir);
+  log(`index-task-files: ${out.length} file(s) in ${Date.now() - t0}ms`);
+  return out;
+});
+
 ipcMain.handle('reveal-file', (_e, filePath) => {
   if (typeof filePath === 'string' && fs.existsSync(filePath)) shell.showItemInFolder(filePath);
 });

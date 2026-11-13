@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('app', {
   findAllFiles:      (dir, names)  => ipcRenderer.invoke('find-all-files', dir, names),
   openTaskFolder:    (dir, name, base) => ipcRenderer.invoke('open-task-folder', dir, name, base),
   revealFile:        (p)           => ipcRenderer.invoke('reveal-file', p),
+  indexTaskFiles:    (dir)         => ipcRenderer.invoke('index-task-files', dir),
   resizeInspect:     (tasks, keys) => ipcRenderer.invoke('resize-inspect', tasks, keys),
   resizeRender:      (job)         => ipcRenderer.invoke('resize-render', job),
   resizeCancel:      ()            => ipcRenderer.invoke('resize-cancel'),

@@ -90,17 +90,65 @@
 
   <div id="bulk-actions-bar" class="inactive">
     <span id="bulk-actions-count">0 selected</span>
-    <button id="bulk-mark-accept-btn" class="primary">Mark as To Accept</button>
-    <button id="bulk-mark-inwork-btn" title="Move the selected tasks back to the In work status">Mark as In Work</button>
-    <button id="bulk-autofill-btn" title="Search the working directory for matching preview images and 9x16 videos, and fill in Preview + Timing for the selected tasks">Autofill</button>
-    <button id="bulk-resize-btn" title="Make the 1x1, 4x5 and 16x9 versions (and custom sizes) of each selected task's _9x16.mp4, next to it">Resize</button>
-    <button id="bulk-compress-btn" title="Shrink every video of the selected tasks that is over 32 MB, in place (the 9x16 master and its resizes)">Compress</button>
-    <button id="bulk-copy-name-btn" title="Copy the selected task name(s) to the clipboard">⧉ Copy name</button>
-    <button id="bulk-copy-brief-btn" title="Copy each selected task's name followed by its brief (Description)">⧉ Copy name + brief</button>
-    <button id="bulk-clear-btn">Clear selection</button>
+    <button id="bulk-resize-btn" class="step-btn" data-step="resize" title="Make the 1x1, 4x5 and 16x9 versions (and custom sizes) of each selected task's _9x16.mp4, next to it">Resize</button>
+    <span class="step-arrow">›</span>
+    <button id="bulk-compress-btn" class="step-btn" data-step="compress" title="Shrink every video of the selected tasks that is over 32 MB, in place (the 9x16 master and its resizes)">Compress</button>
+    <span class="step-arrow">›</span>
+    <button id="bulk-autofill-btn" class="step-btn" data-step="autofill" title="Fill Preview, Timing, Hours and links for the selected tasks from the working directory">Autofill</button>
+    <span class="step-arrow">›</span>
+    <button id="bulk-mark-accept-btn" class="step-btn" data-step="accept" title="Hand the selected tasks in">Mark as To Accept</button>
+    <div id="more-actions">
+      <button id="more-actions-btn" title="More actions">⋯</button>
+      <div id="more-actions-menu" class="hidden">
+        <button id="bulk-mark-inwork-btn" title="Move the selected tasks back to the In work status">Mark as In Work</button>
+        <button id="bulk-copy-name-btn" title="Copy the selected task name(s) to the clipboard">⧉ Copy name</button>
+        <button id="bulk-copy-brief-btn" title="Copy each selected task's name followed by its brief (Description)">⧉ Copy name + brief</button>
+        <button id="bulk-clear-btn">Clear selection</button>
+      </div>
+    </div>
   </div>
 
+  <div id="workspace">
   <main id="records-container"><p class="empty">Enter your API key to get started.</p></main>
+  <aside id="task-panel" class="hidden">
+    <div id="task-panel-header">
+      <strong id="task-panel-title"></strong>
+      <button id="task-panel-folder-btn" title="Open this task's folder">📂</button>
+      <button id="task-panel-details-btn" title="Open all fields (same as double-click)">↗</button>
+      <button id="task-panel-close-btn" title="Close">×</button>
+    </div>
+    <div id="task-panel-body">
+      <div class="task-panel-label">Brief <button id="task-panel-copy-brief-btn">⧉ Copy</button></div>
+      <div id="task-panel-brief"></div>
+      <div class="task-panel-label">Files in the working directory</div>
+      <div id="task-panel-files"></div>
+      <div class="task-panel-label">Fields</div>
+      <div id="task-panel-fields"></div>
+    </div>
+    <div id="rename-panel" class="hidden">
+      <div id="rename-header">
+        <span id="rename-task-label">Task: <strong id="rename-task-name">—</strong></span>
+        <button id="rename-panel-close" title="Close">×</button>
+      </div>
+      <div id="drop-zone">
+        Drop files here or <button id="browse-files-btn">browse</button>
+      </div>
+      <div id="file-list"></div>
+      <div id="fix-ratios-row" class="hidden">
+        <span id="fix-ratios-note"></span>
+        <button id="fix-ratios-btn" title="Crop these files to their exact aspect ratio, centred, then scale to the delivery size. Never stretches.">Fix ratios</button>
+        <label id="auto-fix-ratio-label" title="Remember this: off-ratio files are cropped as soon as they are added.">
+          <input type="checkbox" id="auto-fix-ratio-input"> Always fix automatically
+        </label>
+      </div>
+      <div id="rename-footer" class="hidden">
+        <span id="rename-warning"></span>
+        <button id="clear-files-btn">Clear</button>
+        <button id="rename-btn" class="primary">Rename Files</button>
+      </div>
+    </div>
+  </aside>
+  </div>
   <div id="dashboard-container" class="hidden">
     <div id="dashboard-controls">
       <span class="dash-controls-label">Period:</span>
@@ -153,29 +201,6 @@
           <div id="canvas-cards"></div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <div id="rename-panel" class="hidden">
-    <div id="rename-header">
-      <span id="rename-task-label">Task: <strong id="rename-task-name">—</strong></span>
-      <button id="rename-panel-close" title="Close">×</button>
-    </div>
-    <div id="drop-zone">
-      Drop files here or <button id="browse-files-btn">browse</button>
-    </div>
-    <div id="file-list"></div>
-    <div id="fix-ratios-row" class="hidden">
-      <span id="fix-ratios-note"></span>
-      <button id="fix-ratios-btn" title="Crop these files to their exact aspect ratio, centred, then scale to the delivery size. Never stretches.">Fix ratios</button>
-      <label id="auto-fix-ratio-label" title="Remember this: off-ratio files are cropped as soon as they are added.">
-        <input type="checkbox" id="auto-fix-ratio-input"> Always fix automatically
-      </label>
-    </div>
-    <div id="rename-footer" class="hidden">
-      <span id="rename-warning"></span>
-      <button id="clear-files-btn">Clear</button>
-      <button id="rename-btn" class="primary">Rename Files</button>
     </div>
   </div>
 
@@ -311,6 +336,7 @@
   <script src="autofill-data.js"></script>
   <script src="workload-data.js"></script>
   <script src="resize-plan.js"></script>
+  <script src="readiness-data.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>
   <script src="canvas.js"></script>
