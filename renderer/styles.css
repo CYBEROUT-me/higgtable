@@ -493,3 +493,10 @@ table.dash-table tr.total-row td { border-top: 1px solid var(--border-strong); b
 .ready-cell.muted { color: var(--text-muted); }
 #task-panel #rename-panel { border-top: 1px solid var(--border); max-height: none; flex-shrink: 0; }
 #task-panel #rename-header { display: none; }
+#task-panel-multi { flex: 1; overflow-y: auto; padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: 2px; }
+#task-panel-multi.hidden, #task-panel-body.hidden { display: none; }
+.task-panel-pick { display: flex; justify-content: space-between; gap: var(--space-3); width: 100%; text-align: left; background: none; border: 1px solid transparent; padding: var(--space-2); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-primary); }
+.task-panel-pick:hover { border-color: var(--border-strong); }
+.task-panel-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+.task-panel-pick .ok { color: var(--accent); } .task-panel-pick .warn { color: #e0a43a; } .task-panel-pick .muted { color: var(--text-muted); }
+#task-panel-brief strong { color: var(--text-primary); }

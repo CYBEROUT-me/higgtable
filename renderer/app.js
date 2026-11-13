@@ -877,8 +877,10 @@ function render() {
 
   container.innerHTML = '';
   container.appendChild(table);
+  state.visibleRecords = filtered;
   setStatus(`${filtered.length} of ${state.records.length} records`);
   updateBulkActionsBar();
+  renderTaskPanel();
 
   if (state.highlightRecordId) {
     if (highlightedRow) highlightedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -973,15 +975,25 @@ function renderStepButtons() {
 function renderTaskPanel() {
   const panel = document.getElementById('task-panel');
   const rec = state.selectedTask;
-  panel.classList.toggle('hidden', !rec);
+  // Several selected (Shift / Cmd-click): the panel lists the whole selection
+  // with what each still needs, instead of only the first task.
+  const multi = state.selectedIds.size > 1;
+  panel.classList.toggle('hidden', !rec && !multi);
+  document.getElementById('task-panel-multi').classList.toggle('hidden', !multi);
+  document.getElementById('task-panel-body').classList.toggle('hidden', multi);
+  document.getElementById('rename-panel').classList.toggle('hidden', multi || !rec);
+  ['task-panel-folder-btn', 'task-panel-details-btn']
+    .forEach(id => document.getElementById(id).classList.toggle('hidden', multi));
+  if (multi) { renderTaskPanelSelection(); return; }
   if (!rec) return;
   const name = rec.fields['Name'] || '';
   document.getElementById('task-panel-title').textContent = name;
   document.getElementById('task-panel-title').title = name;
-  const brief = briefFromDescription(rec.fields['Description']);
+  const description = rec.fields['Description'];
   const briefEl = document.getElementById('task-panel-brief');
-  briefEl.textContent = brief || 'No brief';
-  briefEl.classList.toggle('muted', !brief);
+  // Same markdown rendering as the task window (renderMarkdownLite escapes HTML).
+  briefEl.innerHTML = description ? renderMarkdownLite(String(description)) : 'No brief';
+  briefEl.classList.toggle('muted', !description);
 
   const line = (label, value, cls) => {
     const row = document.createElement('div');
@@ -1015,6 +1027,72 @@ function renderTaskPanel() {
     fieldsEl.append(line(i.label, i.done ? 'set' : 'empty', i.done ? 'ok' : 'warn'));
   });
   if (r && r.handedIn) fieldsEl.append(line('Status', rec.fields['Status'], 'ok'));
+}
+
+function renderTaskPanelSelection() {
+  const selected = state.records
+    .filter(r => state.selectedIds.has(r.id))
+    .sort((a, b) => compareTaskNames(a.fields['Name'] || '', b.fields['Name'] || ''));
+  document.getElementById('task-panel-title').textContent = `${selected.length} tasks selected`;
+  document.getElementById('task-panel-title').title = '';
+  const listEl = document.getElementById('task-panel-multi');
+  listEl.replaceChildren();
+  const fieldNames = readinessFieldNames();
+  selected.forEach(r => {
+    const row = document.createElement('button');
+    row.className = 'task-panel-pick';
+    row.title = 'Show only this task';
+    const name = document.createElement('span');
+    name.className = 'task-panel-pick-name';
+    name.textContent = r.fields['Name'] || r.id;
+    const status = document.createElement('span');
+    const ready = readinessFor(r, fieldNames);
+    if (ready) {
+      status.textContent = readinessLabel(ready);
+      status.className = ready.handedIn ? 'muted' : ready.ready ? 'ok' : 'warn';
+      status.title = ready.handedIn ? '' : ready.missing.map(i => i.label).join('\n');
+    }
+    row.append(name, status);
+    row.addEventListener('click', () => selectSingleTask(r));
+    listEl.appendChild(row);
+  });
+}
+
+// Selects exactly one task, as a plain click on its row does.
+function selectSingleTask(rec) {
+  state.selectedIds.clear();
+  state.selectionAnchorId = rec.id;
+  state.selectionCursorId = rec.id;
+  state.selectedTask = rec;
+  state.selectedIds.add(rec.id);
+  openRenamePanel(rec);
+  render();
+  scrollRecordIntoView(rec.id);
+}
+
+function scrollRecordIntoView(id) {
+  const i = (state.visibleRecords || []).findIndex(r => r.id === id);
+  const row = document.querySelectorAll('#records-container tbody tr')[i];
+  if (row) row.scrollIntoView({ block: 'nearest' });
+}
+
+// ↑/↓ move to the previous/next task in the table; Shift+↑/↓ extend the
+// selection from the anchor, like Shift-click.
+function moveTaskCursor(step, extend) {
+  const list = state.visibleRecords || [];
+  if (!list.length) return;
+  const curId = state.selectionCursorId || (state.selectedTask && state.selectedTask.id);
+  let i = list.findIndex(r => r.id === curId);
+  i = i === -1 ? (step > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, i + step));
+  const next = list[i];
+  if (!extend || !state.selectedTask) { selectSingleTask(next); return; }
+  let a = list.findIndex(r => r.id === state.selectionAnchorId);
+  if (a === -1) a = i;
+  const [start, end] = a < i ? [a, i] : [i, a];
+  state.selectedIds = new Set(list.slice(start, end + 1).map(r => r.id));
+  state.selectionCursorId = next.id;
+  render();
+  scrollRecordIntoView(next.id);
 }
 
 async function copyPanelBrief() {
@@ -2099,6 +2177,7 @@ function onRowClick(rec, tr, e, index, filteredList) {
     if (anchorIndex === -1) anchorIndex = index;
     const [start, end] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
     for (let i = start; i <= end; i++) state.selectedIds.add(filteredList[i].id);
+    state.selectionCursorId = rec.id;
     render();
     return;
   }
@@ -2106,12 +2185,14 @@ function onRowClick(rec, tr, e, index, filteredList) {
     e.preventDefault();
     state.selectedIds.has(rec.id) ? state.selectedIds.delete(rec.id) : state.selectedIds.add(rec.id);
     state.selectionAnchorId = rec.id;
+    state.selectionCursorId = rec.id;
     render();
     return;
   }
 
   state.selectedIds.clear();
   state.selectionAnchorId = rec.id;
+  state.selectionCursorId = rec.id;
   if (state.selectedTask && state.selectedTask.id === rec.id) {
     clearTaskSelection();
     render();
@@ -3504,6 +3585,16 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#more-actions')) document.getElementById('more-actions-menu').classList.add('hidden');
 });
 window.addEventListener('focus', () => refreshTaskFileIndex());
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  if (document.getElementById('records-container').classList.contains('hidden')) return;
+  const modalOpen = [...document.querySelectorAll('.modal-overlay')].some(m => !m.classList.contains('hidden'));
+  if (modalOpen) return;
+  e.preventDefault();
+  moveTaskCursor(e.key === 'ArrowDown' ? 1 : -1, e.shiftKey);
+});
 document.getElementById('resize-task-list').addEventListener('click', e => {
   const btn = e.target.closest('.resize-row-folder');
   if (btn) window.app.revealFile(btn.dataset.path);
