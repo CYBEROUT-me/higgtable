@@ -1301,6 +1301,15 @@ function openRecordModal(rec, tableName) {
   document.getElementById('record-modal').classList.remove('hidden');
 }
 
+async function openCurrentTaskFolder() {
+  const rec = currentDetailRecord;
+  const name = rec && rec.fields['Name'];
+  if (!name) return;
+  if (!state.workingDirectory) { alert('Set a working directory first (⚙ Settings).'); return; }
+  const opened = await window.app.openTaskFolder(state.workingDirectory, name, stripAspectRatio(name));
+  if (!opened) alert(`No folder named "${name}" and no ${stripAspectRatio(name)}_9x16.mp4 in the working directory.`);
+}
+
 function closeRecordModal() {
   document.getElementById('record-modal').classList.add('hidden');
   currentDetailRecord = null;
@@ -1750,7 +1759,7 @@ async function uploadAttachmentToField(rec, tableName, field, statusEl) {
   statusEl.textContent = 'Uploading...';
   try {
     const result = await window.airtable.uploadAttachment(state.baseId, rec.id, field.name, paths[0]);
-    rec.fields[field.name] = result.fields[field.name];
+    rec.fields[field.name] = uploadedAttachments(result, field.name);
     log(`uploadAttachmentToField: uploaded ${paths[0]} to ${field.name} on record ${rec.id}`);
     if (currentDetailRecord && currentDetailRecord.id === rec.id) {
       renderRecordModal(rec, tableName);
@@ -2187,7 +2196,7 @@ async function performRename() {
     for (const filePath of previewCandidates) {
       try {
         const result = await window.airtable.uploadAttachment(state.baseId, state.selectedTask.id, 'Preview', filePath);
-        state.selectedTask.fields['Preview'] = result.fields['Preview'];
+        state.selectedTask.fields['Preview'] = uploadedAttachments(result, 'Preview');
         log(`performRename: auto-uploaded 1x1 preview ${filePath} to task ${state.selectedTask.id}`);
         previewNote = '\n\n1x1 image uploaded to the task’s Preview in Airtable.';
       } catch (err) {
@@ -2670,7 +2679,7 @@ async function confirmAutofill() {
     for (const c of toUpload) {
       try {
         const result = await window.airtable.uploadAttachment(state.baseId, c.rec.id, 'Preview', c.preview.path);
-        c.rec.fields['Preview'] = result.fields['Preview'];
+        c.rec.fields['Preview'] = uploadedAttachments(result, 'Preview');
         uploaded++;
         uploadedOk.push(c);
         log(`confirmAutofill: uploaded ${c.preview.path} to ${c.rec.fields['Name']}`);
@@ -2816,10 +2825,14 @@ async function openResizeModal(mode = 'resize') {
       window.app.getSettings(),
     ]);
     resizeState.custom = (settings.resizeCustomSizes || []).filter(k => targetFromKey(k));
-    resizeState.selected = new Set(DEFAULT_RESIZE_KEYS);
-    resizeState.previews = true;
-    resizeState.sides = 'blur';
-    resizeState.fitLimit = true;
+    // Last run's choices, so a designer who always adds 1.91x1 (or never wants
+    // previews) does not re-tick it every time. Unknown keys are dropped.
+    const last = settings.resizeOptions || {};
+    const lastKeys = (last.keys || []).filter(k => targetFromKey(k));
+    resizeState.selected = new Set(lastKeys.length ? lastKeys : DEFAULT_RESIZE_KEYS);
+    resizeState.previews = last.previews !== false;
+    resizeState.sides = last.sides === 'duplicate' ? 'duplicate' : 'blur';
+    resizeState.fitLimit = last.fitLimit !== false;
     resizeState.lastRun = null;
     resizeState.mode = mode;
     resizeState.tasks = records.map(rec => {
@@ -2970,7 +2983,15 @@ function renderResizeModal() {
 
     const name = document.createElement('span');
     name.className = 'resize-row-name';
-    name.textContent = task.name;
+    if (task.source) {
+      const folder = document.createElement('button');
+      folder.className = 'resize-row-folder';
+      folder.dataset.path = task.source;
+      folder.textContent = '📂';
+      folder.title = 'Show the 9x16 source in its folder';
+      name.appendChild(folder);
+    }
+    name.appendChild(document.createTextNode(task.name));
     name.title = task.source || task.name;
 
     const src = document.createElement('span');
@@ -3044,6 +3065,10 @@ function renderResizeModal() {
       : resizeSummary(runnable.length, keys.length, s.previews);
   }
 
+  // After a run that made files, the next step is Autofill on the same tasks.
+  document.getElementById('resize-autofill-btn')
+    .classList.toggle('hidden', s.running || !s.lastRun || !s.lastRun.done);
+
   const renderBtn = document.getElementById('resize-render-btn');
   if (s.running) {
     const active = s.tasks.filter(t => t.state && t.state !== 'skipped');
@@ -3116,6 +3141,9 @@ async function startResize() {
   const keys = resizeSelectedKeys();
   const runnable = resizeRunnable();
   if (!runnable.length || (!compress && !keys.length)) return;
+  if (!compress) {
+    window.app.saveSettings({ resizeOptions: { keys, previews: s.previews, sides: s.sides, fitLimit: s.fitLimit } });
+  }
 
   s.tasks.forEach(t => {
     t.state = runnable.includes(t) ? 'waiting' : 'skipped';
@@ -3170,6 +3198,15 @@ function applyResizeProgress(p) {
   if (p.compressed) task.compressed = p.compressed;
   if (p.kept) task.kept = p.kept;
   renderResizeModal();
+}
+
+function resizeToAutofill() {
+  if (resizeState.running) return;
+  const ids = resizeState.tasks.map(t => t.id);
+  document.getElementById('resize-modal').classList.add('hidden');
+  state.selectedIds = new Set(ids);
+  render();
+  openAutofillModal();
 }
 
 function closeResizeModal() {
@@ -3297,6 +3334,12 @@ document.getElementById('autofill-done-close-btn').addEventListener('click', () 
 });
 document.getElementById('resize-render-btn').addEventListener('click', startResize);
 document.getElementById('resize-close-btn').addEventListener('click', closeResizeModal);
+document.getElementById('resize-autofill-btn').addEventListener('click', resizeToAutofill);
+document.getElementById('open-folder-btn').addEventListener('click', openCurrentTaskFolder);
+document.getElementById('resize-task-list').addEventListener('click', e => {
+  const btn = e.target.closest('.resize-row-folder');
+  if (btn) window.app.revealFile(btn.dataset.path);
+});
 window.app.onResizeProgress(applyResizeProgress);
 const taskSearchInput = document.getElementById('task-search');
 taskSearchInput.addEventListener('input', renderTaskSearchResults);
@@ -3463,6 +3506,13 @@ dropZone.addEventListener('drop', async e => {
 });
 
 // ── Util ────────────────────────────────────────────────────────────────
+
+// Airtable's upload endpoint returns `fields` keyed by field ID, not name, so
+// reading result.fields['Preview'] blanked the local copy after every upload.
+function uploadedAttachments(result, fieldName) {
+  const fields = (result && result.fields) || {};
+  return fields[fieldName] || Object.values(fields)[0] || [];
+}
 
 function setStatus(msg, isError = false) {
   const el = document.getElementById('statusbar');

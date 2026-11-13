@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('app', {
   copyToClipboard:   (text)        => ipcRenderer.invoke('copy-to-clipboard', text),
   normalizeImage:    (p, plan)     => ipcRenderer.invoke('normalize-image', p, plan),
   findAllFiles:      (dir, names)  => ipcRenderer.invoke('find-all-files', dir, names),
+  openTaskFolder:    (dir, name, base) => ipcRenderer.invoke('open-task-folder', dir, name, base),
+  revealFile:        (p)           => ipcRenderer.invoke('reveal-file', p),
   resizeInspect:     (tasks, keys) => ipcRenderer.invoke('resize-inspect', tasks, keys),
   resizeRender:      (job)         => ipcRenderer.invoke('resize-render', job),
   resizeCancel:      ()            => ipcRenderer.invoke('resize-cancel'),

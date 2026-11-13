@@ -14,10 +14,22 @@ const UPDATE_REPO = 'CYBEROUT-me/higgtable';
 // written to a file coworkers can send back when something feels slow.
 
 const logFilePath = path.join(app.getPath('userData'), 'higgtable.log');
+// Kept small: one current file up to 5 MB plus the previous one, so it never
+// grows without bound (it had reached ~1.9 million lines).
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const oldLogFilePath = path.join(app.getPath('userData'), 'higgtable.old.log');
+let logWritesSinceCheck = Infinity; // check the size on the first write
+
+function rotateLogIfBig() {
+  try {
+    if (fs.statSync(logFilePath).size > LOG_MAX_BYTES) fs.renameSync(logFilePath, oldLogFilePath);
+  } catch {}
+}
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
+  if (++logWritesSinceCheck > 500) { logWritesSinceCheck = 0; rotateLogIfBig(); }
   try { fs.appendFileSync(logFilePath, line + '\n'); } catch {}
 }
 
@@ -307,7 +319,9 @@ ipcMain.handle('upload-attachment', async (_e, baseId, recordId, fieldName, file
   log(`upload-attachment: uploading ${filename} (${buf.length} bytes) to record=${recordId} field=${fieldName}`);
   try {
     const result = await uploadAttachment(key, baseId, recordId, fieldName, filename, contentType, buf.toString('base64'), log);
-    log(`upload-attachment: success, ${fieldName} now has ${(result.fields?.[fieldName] || []).length} attachment(s)`);
+    // The upload endpoint keys `fields` by field ID, not by name.
+    const att = result.fields?.[fieldName] || Object.values(result.fields || {})[0] || [];
+    log(`upload-attachment: success, ${fieldName} now has ${att.length} attachment(s)`);
     return result;
   } catch (err) {
     log(`upload-attachment: FAILED — ${err.message}`);
@@ -722,6 +736,24 @@ function findDirByExactName(dir, name) {
 }
 
 
+
+// Opens a task's folder: the folder named exactly after the task, else the
+// folder holding its <base>_9x16.mp4. Returns what was opened, or null.
+ipcMain.handle('open-task-folder', (_e, dir, taskName, base) => {
+  if (!dir) return null;
+  const folder = findDirByExactName(dir, taskName);
+  if (folder) { shell.openPath(folder); return folder; }
+  const wanted = `${base}_9x16.mp4`;
+  const found = {};
+  walkDirCollectingAll(dir, new Map([[wanted.toLowerCase(), wanted]]), found);
+  const file = (found[wanted] || [])[0];
+  if (file) { shell.showItemInFolder(file); return path.dirname(file); }
+  return null;
+});
+
+ipcMain.handle('reveal-file', (_e, filePath) => {
+  if (typeof filePath === 'string' && fs.existsSync(filePath)) shell.showItemInFolder(filePath);
+});
 
 // For the Autofill approval modal — lets it show a thumbnail before upload.
 ipcMain.handle('read-image-data-url', (_e, filePath) => {
