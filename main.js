@@ -250,6 +250,15 @@ function createWindow() {
     }
   });
   win.loadFile('renderer/index.html');
+  // A link clicked anywhere in the page must open in the system browser, never
+  // replace the app or open an Electron window of its own.
+  const openOutside = url => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
+  win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url.startsWith('file:')) return;
+    e.preventDefault();
+    openOutside(url);
+  });
   win.webContents.once('did-finish-load', () => initAutoUpdate(win));
 }
 

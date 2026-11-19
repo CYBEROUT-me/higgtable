@@ -108,3 +108,15 @@ test('formatNameAndBriefs puts each brief under its name, tasks separated by a b
     { name: 'PL_3_9x16', description: 'A\\_B' },
   ])).toBe('PL_1_9x16\nLine one\nLine two\n\nPL_2_9x16\n\nPL_3_9x16\nA_B');
 });
+
+test('formatNameAndBriefs adds a REF line only when asked and present', () => {
+  const tasks = [
+    { name: 'PL_1_9x16', description: 'Brief', ref: 'https://example.com/a' },
+    { name: 'PL_2_9x16', description: '', ref: 'https://example.com/b' },
+    { name: 'PL_3_9x16', description: 'Other', ref: '' },
+  ];
+  expect(formatNameAndBriefs(tasks, { withRef: true })).toBe(
+    'PL_1_9x16\nBrief\nREF: https://example.com/a\n\nPL_2_9x16\nREF: https://example.com/b\n\nPL_3_9x16\nOther'
+  );
+  expect(formatNameAndBriefs(tasks)).toBe('PL_1_9x16\nBrief\n\nPL_2_9x16\n\nPL_3_9x16\nOther');
+});

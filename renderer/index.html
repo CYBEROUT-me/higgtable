@@ -98,14 +98,12 @@
     <span class="step-arrow">›</span>
     <button id="bulk-mark-accept-btn" class="step-btn" data-step="accept" title="Hand the selected tasks in">Mark as To Accept</button>
     <button id="bulk-finish-btn" title="Run only the steps the selected tasks still need, in order: Resize, Compress, Autofill, To Accept">▶ Finish</button>
-    <div id="more-actions">
-      <button id="more-actions-btn" title="More actions">⋯</button>
-      <div id="more-actions-menu" class="hidden">
-        <button id="bulk-mark-inwork-btn" title="Move the selected tasks back to the In work status">Mark as In Work</button>
-        <button id="bulk-copy-name-btn" title="Copy the selected task name(s) to the clipboard">⧉ Copy name</button>
-        <button id="bulk-copy-brief-btn" title="Copy each selected task's name followed by its brief (Description)">⧉ Copy name + brief</button>
-        <button id="bulk-clear-btn">Clear selection</button>
-      </div>
+    <div id="extra-actions">
+      <button id="bulk-mark-inwork-btn" class="icon-btn" title="Mark as In Work: move the selected tasks back to the In work status">↩</button>
+      <button id="bulk-copy-name-btn" class="icon-btn" title="Copy name (⌘C / Ctrl+C)">⧉</button>
+      <button id="bulk-copy-brief-btn" class="icon-btn" title="Copy name + brief (⌘⇧C / Ctrl+Shift+C)">📋</button>
+      <button id="bulk-copy-ref-btn" class="icon-btn" title="Copy name + brief + REF link">🔗</button>
+      <button id="bulk-clear-btn" class="icon-btn" title="Clear selection">✕</button>
     </div>
   </div>
 
@@ -120,6 +118,7 @@
     </div>
     <div id="task-panel-multi" class="hidden"></div>
     <div id="task-panel-body">
+      <div id="task-panel-links"></div>
       <div class="task-panel-label">Brief <button id="task-panel-copy-brief-btn">⧉ Copy</button></div>
       <div id="task-panel-brief"></div>
       <div class="task-panel-label">Files in the working directory</div>

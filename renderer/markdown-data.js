@@ -78,12 +78,17 @@ function briefFromDescription(text) {
 }
 
 // "Name\nbrief" per task, tasks separated by a blank line. A task with no
-// brief contributes its name alone.
-function formatNameAndBriefs(tasks) {
+// brief contributes its name alone. With `withRef`, each task's REF link
+// follows as a last line "REF: <link>" (left out when the task has none).
+function formatNameAndBriefs(tasks, { withRef = false } = {}) {
   return tasks
     .map(t => {
+      const lines = [t.name];
       const brief = briefFromDescription(t.description);
-      return brief ? `${t.name}\n${brief}` : t.name;
+      if (brief) lines.push(brief);
+      const ref = String(t.ref || '').trim();
+      if (withRef && ref) lines.push(`REF: ${ref}`);
+      return lines.join('\n');
     })
     .join('\n\n');
 }

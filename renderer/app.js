@@ -1070,6 +1070,7 @@ function renderTaskPanel() {
   // Same markdown rendering as the task window (renderMarkdownLite escapes HTML).
   briefEl.innerHTML = description ? renderMarkdownLite(String(description)) : 'No brief';
   briefEl.classList.toggle('muted', !description);
+  renderTaskPanelLinks(rec);
 
   const line = (label, value, cls) => {
     const row = document.createElement('div');
@@ -1103,6 +1104,33 @@ function renderTaskPanel() {
     fieldsEl.append(line(i.label, i.done ? 'set' : 'empty', i.done ? 'ok' : 'warn'));
   });
   if (r && r.handedIn) fieldsEl.append(line('Status', rec.fields['Status'], 'ok'));
+}
+
+// Buttons for the task's links: Drive (Creative Link), Figma (Figma/Canvas
+// link) and REF, each shown only when the field has a link. Field names are
+// resolved against the live schema; LB spells its Figma column "Figmа Link"
+// with a Cyrillic "а", which the loose match cannot see, so any "Fig… link"
+// column is the fallback.
+function renderTaskPanelLinks(rec) {
+  const names = (state.tables[state.activeTable]?.fields || []).map(f => f.name);
+  const figmaField = resolveFieldName(names, FIGMA_LINK_FIELD)
+    || names.find(n => /^fig/i.test(n) && /link/i.test(n));
+  const links = [
+    ['Drive', resolveFieldName(names, CREATIVE_LINK_FIELD)],
+    ['Figma', figmaField],
+    ['REF', resolveFieldName(names, 'REF')],
+  ];
+  const el = document.getElementById('task-panel-links');
+  el.replaceChildren();
+  links.forEach(([label, field]) => {
+    const url = field && String(rec.fields[field] || '').trim();
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    const btn = document.createElement('button');
+    btn.textContent = `↗ ${label}`;
+    btn.title = url;
+    btn.addEventListener('click', () => window.app.openExternal(rewriteDriveLink(url, state.driveAccountIndex)));
+    el.append(btn);
+  });
 }
 
 function renderTaskPanelSelection() {
@@ -2174,49 +2202,40 @@ function closeTaskSearch({ clear = false } = {}) {
   if (clear) document.getElementById('task-search').value = '';
 }
 
-// Copies the selected task name(s). Sorted by name so a multi-row copy lands in
-// the same order everything else in this app uses, and joined by newlines so it
-// pastes straight into a list.
-async function copySelectedTaskNames() {
-  const names = state.records
-    .filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
-    .map(r => r.fields['Name'])
-    .sort(compareTaskNames);
-  if (!names.length) return;
-
-  const btn = document.getElementById('bulk-copy-name-btn');
-  try {
-    await window.app.copyToClipboard(names.join('\n'));
-    // Confirm in place: a clipboard write is otherwise completely invisible.
-    if (btn) {
-      btn.textContent = names.length === 1 ? '✓ Copied' : `✓ Copied ${names.length}`;
-      setTimeout(() => { btn.textContent = '⧉ Copy name'; }, 1200);
-    }
-    log(`copySelectedTaskNames: copied ${names.length} name(s)`);
-  } catch (err) {
-    alert(`Could not copy: ${err.message}`);
-    log(`copySelectedTaskNames: FAILED — ${err.message}`);
-  }
+// Shows "✓" (or "✓ N") on a copy button for a moment: a clipboard write is
+// otherwise invisible. The icon is restored from data-label afterwards.
+function flashCopied(btn, count) {
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = count > 1 ? `✓ ${count}` : '✓';
+  clearTimeout(btn._flashTimer);
+  btn._flashTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1200);
 }
 
-// Same as Copy name, but each name is followed by the task's brief (its
-// Description, with Airtable's escaping undone), tasks separated by a blank line.
-async function copySelectedNamesAndBriefs() {
-  const tasks = state.records
+// Copies the selected tasks, sorted by name so a multi-row copy lands in the
+// same order everything else in this app uses:
+//   'name'  names, one per line (pastes straight into a list)
+//   'brief' name + brief per task, tasks separated by a blank line
+//   'ref'   the same plus a "REF: <link>" line
+const COPY_BUTTONS = { name: 'bulk-copy-name-btn', brief: 'bulk-copy-brief-btn', ref: 'bulk-copy-ref-btn' };
+async function copySelectedTasks(kind) {
+  const recs = state.records
     .filter(r => state.selectedIds.has(r.id) && r.fields['Name'])
-    .sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']))
-    .map(r => ({ name: r.fields['Name'], description: r.fields['Description'] }));
-  if (!tasks.length) return;
-
-  const btn = document.getElementById('bulk-copy-brief-btn');
+    .sort((a, b) => compareTaskNames(a.fields['Name'], b.fields['Name']));
+  if (!recs.length) return;
+  const text = kind === 'name'
+    ? recs.map(r => r.fields['Name']).join('\n')
+    : formatNameAndBriefs(
+      recs.map(r => ({ name: r.fields['Name'], description: r.fields['Description'], ref: r.fields['REF'] })),
+      { withRef: kind === 'ref' },
+    );
   try {
-    await window.app.copyToClipboard(formatNameAndBriefs(tasks));
-    btn.textContent = tasks.length === 1 ? '✓ Copied' : `✓ Copied ${tasks.length}`;
-    setTimeout(() => { btn.textContent = '⧉ Copy name + brief'; }, 1200);
-    log(`copySelectedNamesAndBriefs: copied ${tasks.length} task(s)`);
+    await window.app.copyToClipboard(text);
+    flashCopied(document.getElementById(COPY_BUTTONS[kind]), recs.length);
+    log(`copySelectedTasks(${kind}): copied ${recs.length} task(s)`);
   } catch (err) {
     alert(`Could not copy: ${err.message}`);
-    log(`copySelectedNamesAndBriefs: FAILED — ${err.message}`);
+    log(`copySelectedTasks(${kind}): FAILED — ${err.message}`);
   }
 }
 
@@ -3680,15 +3699,31 @@ document.getElementById('task-panel-details-btn').addEventListener('click', () =
 document.getElementById('task-panel-close-btn').addEventListener('click', () => { clearTaskSelection(); render(); });
 document.getElementById('task-panel-copy-brief-btn').addEventListener('click', copyPanelBrief);
 document.getElementById('bulk-finish-btn').addEventListener('click', finishSelected);
-document.getElementById('more-actions-btn').addEventListener('click', e => {
-  e.stopPropagation();
-  document.getElementById('more-actions-menu').classList.toggle('hidden');
+// Shift-click extends the row selection; without this the browser also
+// selects the text between the two clicks, painting the table blue.
+document.getElementById('records-container').addEventListener('mousedown', e => {
+  if (e.shiftKey && e.target.closest('tbody tr')) e.preventDefault();
 });
-document.getElementById('more-actions-menu').addEventListener('click', () => {
-  document.getElementById('more-actions-menu').classList.add('hidden');
+// ⌘C / Ctrl+C copies the selected task names, ⌘⇧C / Ctrl+Shift+C names + briefs.
+// e.code, not e.key, so it works on any keyboard layout (Ukrainian "с" too).
+// Ordinary copy wins whenever there is something else to copy: focus in a
+// field, text selected on the page, or a modal open.
+document.addEventListener('keydown', e => {
+  if (e.code !== 'KeyC' || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+  if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  if (String(window.getSelection() || '').trim()) return;
+  if (document.getElementById('records-container').classList.contains('hidden')) return;
+  if ([...document.querySelectorAll('.modal-overlay')].some(m => !m.classList.contains('hidden'))) return;
+  if (!state.selectedIds.size) return;
+  e.preventDefault();
+  copySelectedTasks(e.shiftKey ? 'brief' : 'name');
 });
-document.addEventListener('click', e => {
-  if (!e.target.closest('#more-actions')) document.getElementById('more-actions-menu').classList.add('hidden');
+// Links in the panel's brief open in the system browser, like the task window.
+document.getElementById('task-panel-brief').addEventListener('click', e => {
+  const link = e.target.closest('a[href]');
+  if (!link) return;
+  e.preventDefault();
+  window.app.openExternal(rewriteDriveLink(link.href, state.driveAccountIndex));
 });
 window.addEventListener('focus', () => refreshTaskFileIndex());
 document.addEventListener('keydown', e => {
@@ -3744,8 +3779,9 @@ document.getElementById('auto-fix-ratio-input').addEventListener('change', async
   if (state.autoFixRatio) applyAllRatioCrops();
 });
 
-document.getElementById('bulk-copy-name-btn').addEventListener('click', copySelectedTaskNames);
-document.getElementById('bulk-copy-brief-btn').addEventListener('click', copySelectedNamesAndBriefs);
+document.getElementById('bulk-copy-name-btn').addEventListener('click', () => copySelectedTasks('name'));
+document.getElementById('bulk-copy-brief-btn').addEventListener('click', () => copySelectedTasks('brief'));
+document.getElementById('bulk-copy-ref-btn').addEventListener('click', () => copySelectedTasks('ref'));
 document.getElementById('copy-brief-btn').addEventListener('click', copyOpenTaskBrief);
 
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
