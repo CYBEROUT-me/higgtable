@@ -1,7 +1,9 @@
 const TARGET_BASE = 'UT Marketing Team';
 const TARGET_TABLES = ['VCP Creatives', 'PLM Creatives', 'CMC Creatives', 'LB Creatives', 'OMGF Creatives'];
 const DEFAULT_STATUSES = ['In work', 'Ready for Design'];
-const COLUMNS = ['Name', 'Priority', 'Deadline', 'Branch', 'Model ID', 'Script ID', 'Size', 'CP', 'DES', 'Format', 'Network', 'Type', 'Language', 'Status'];
+// Format is not a column: it shows as a video / image icon in front of the name.
+const COLUMNS = ['Name', 'Priority', 'Deadline', 'Branch', 'Model ID', 'Script ID', 'Size', 'CP', 'DES', 'Network', 'Type', 'Language', 'Status'];
+const FORMAT_ICONS = { Video: 'video', Stat: 'image' };
 const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
 
 // Airtable single-select colors are "<hue><Light2|Light1|Bright|Dark1>"
@@ -692,7 +694,8 @@ function renderNotificationDropdown() {
     if (isDeadlineAlert) {
       const title = document.createElement('span');
       title.className = 'notify-alert-title';
-      title.textContent = `⏰ Deadline approaching — ${deadlineAlertLabel(deadline, today) || 'no deadline now'}`;
+      title.innerHTML = iconSvg('clock');
+      title.append(`Deadline approaching — ${deadlineAlertLabel(deadline, today) || 'no deadline now'}`);
       btn.appendChild(title);
     }
     btn.appendChild(document.createTextNode(n.taskName));
@@ -831,7 +834,27 @@ function refreshDES() {
 
 // ── Render ──────────────────────────────────────────────────────────────
 
+// Table and board order: Priority, then Deadline, then the chosen column
+// (Name by default).
+function compareForList(a, b) {
+  const pa = PRIORITY_RANK[a.fields['Priority']] ?? 3;
+  const pb = PRIORITY_RANK[b.fields['Priority']] ?? 3;
+  if (pa !== pb) return pa - pb;
+
+  const da = a.fields['Deadline'] || '';
+  const db = b.fields['Deadline'] || '';
+  if (da !== db) return !da ? 1 : !db ? -1 : (da < db ? -1 : 1);
+
+  const col = state.sortCol || 'Name';
+  const dir = state.sortCol ? state.sortDir : 'asc';
+  const cmp = String(a.fields[col] || '').localeCompare(String(b.fields[col] || ''));
+  return dir === 'asc' ? cmp : -cmp;
+}
+
 function render() {
+  document.getElementById('status-filters').classList.toggle('board-mode', state.view === 'board');
+  document.querySelectorAll('#view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
+  if (state.view === 'board') { renderBoard(); return; }
   const filtered = state.records.filter(r => {
     const des = r.fields['DES'] || '';
     const status = r.fields['Status'] || '';
@@ -841,22 +864,7 @@ function render() {
 
   // Base sort is always Priority, then Deadline — the user's chosen column
   // (Name by default) only breaks ties within that.
-  filtered.sort((a, b) => {
-    const pa = PRIORITY_RANK[a.fields['Priority']] ?? 3;
-    const pb = PRIORITY_RANK[b.fields['Priority']] ?? 3;
-    if (pa !== pb) return pa - pb;
-
-    const da = a.fields['Deadline'] || '';
-    const db = b.fields['Deadline'] || '';
-    if (da !== db) return !da ? 1 : !db ? -1 : (da < db ? -1 : 1);
-
-    const col = state.sortCol || 'Name';
-    const dir = state.sortCol ? state.sortDir : 'asc';
-    const av = String(a.fields[col] || '');
-    const bv = String(b.fields[col] || '');
-    const cmp = av.localeCompare(bv);
-    return dir === 'asc' ? cmp : -cmp;
-  });
+  filtered.sort(compareForList);
 
   const container = document.getElementById('records-container');
   if (!filtered.length) {
@@ -888,9 +896,11 @@ function render() {
 
   const showReady = !!taskFileIndex;
   const readyFieldNames = readinessFieldNames();
-  ['#', ...cols, ...(showReady ? ['Ready'] : [])].forEach(name => {
+  ['#', '', ...cols, ...(showReady ? ['Ready'] : [])].forEach(name => {
     const th = document.createElement('th');
-    if (name === '#' || name === 'Ready') {
+    if (name === '') {
+      th.className = 'thumb-head';
+    } else if (name === '#' || name === 'Ready') {
       th.textContent = name;
       if (name === 'Ready') th.title = 'What is left before this task can be handed in (files in the working directory + fields)';
     } else {
@@ -913,8 +923,24 @@ function render() {
 
   const tbody = table.createTBody();
   let highlightedRow = null;
+  // Packs (tasks from one parent on one day) read as one block: a stronger
+  // line above and below, and a thin accent bar down the left edge.
+  const packs = packLayout(filtered);
+  const multiSelected = state.selectedIds.size > 1;
+  table.classList.toggle('multi-select', multiSelected);
+  const colCount = 2 + cols.length + (showReady ? 1 : 0);
   filtered.forEach((rec, i) => {
+    const pack = packs[i];
+    if (pack.size > 1 && pack.index === 0) {
+      renderPackHeader(tbody, filtered.slice(i, i + pack.size), colCount);
+    }
+    if (pack.size > 1 && collapsedPacks.has(packKey(rec))) return;
     const tr = tbody.insertRow();
+    if (pack.size > 1) {
+      tr.classList.add('in-pack');
+      if (pack.index === 0) tr.classList.add('pack-first');
+      if (pack.index === pack.size - 1) tr.classList.add('pack-last');
+    }
     if (state.selectedTask && state.selectedTask.id === rec.id) tr.classList.add('selected');
     if (state.selectedIds.has(rec.id)) tr.classList.add('bulk-selected');
     if (state.highlightRecordId === rec.id) {
@@ -924,7 +950,27 @@ function render() {
     tr.onclick = e => onRowClick(rec, tr, e, i, filtered);
     tr.ondblclick = () => openRecordModal(rec, state.activeTable);
 
-    const tdN = tr.insertCell(); tdN.textContent = i + 1;
+    const tdN = tr.insertCell();
+    // With several rows selected each one shows a check instead of its number,
+    // so the selection reads at a glance; the focused row stays brighter.
+    if (multiSelected && state.selectedIds.has(rec.id)) {
+      tdN.innerHTML = iconSvg('check');
+      tdN.className = 'sel-check';
+    } else {
+      tdN.textContent = i + 1;
+    }
+    const tdThumb = tr.insertCell();
+    tdThumb.className = 'thumb-cell';
+    const thumbUrl = previewUrl(rec, 'small');
+    if (thumbUrl) {
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = thumbUrl;
+      tdThumb.append(img);
+    } else {
+      tdThumb.innerHTML = `<span class="thumb-ph">${iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image')}</span>`;
+    }
     cols.forEach(col => {
       const td = tr.insertCell();
       const val = rec.fields[col];
@@ -938,7 +984,11 @@ function render() {
         return;
       }
       td.textContent = val == null ? '' : Array.isArray(val) ? val.join(', ') : String(val);
-      if (col === 'Name') td.title = String(val || '');
+      if (col === 'Name') {
+        const format = rec.fields['Format'] || '';
+        td.title = format ? `${val || ''}\n${format}` : String(val || '');
+        td.classList.add('name-cell');
+      }
     });
     if (showReady) {
       const td = tr.insertCell();
@@ -962,6 +1012,245 @@ function render() {
     if (highlightedRow) highlightedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
     state.highlightRecordId = null; // one-shot — don't replay on the next unrelated render
   }
+}
+
+// ── Board view ───────────────────────────────────────────────────────────
+// The active table's tasks as cards in workflow columns. The status chips do
+// not apply here (the columns are the statuses); the designer picker does.
+// Dragging cards to another column changes their Status, with Undo.
+const BOARD_STATUSES = ['Rework', 'Ready for Design', 'In work', 'To accept'];
+const BOARD_CARD_LIMIT = 150;
+
+function renderBoard() {
+  const statuses = BOARD_STATUSES.filter(s => !state.statusOptions.length || state.statusOptions.includes(s));
+  const recs = state.records
+    .filter(r => (!state.selectedDES || (r.fields['DES'] || '') === state.selectedDES)
+      && statuses.includes(r.fields['Status'] || ''))
+    .sort(compareForList);
+  const byStatus = new Map(statuses.map(s => [s, []]));
+  recs.forEach(r => byStatus.get(r.fields['Status']).push(r));
+  const ordered = statuses.flatMap(s => byStatus.get(s));
+  const today = toISO(new Date());
+
+  const board = document.createElement('div');
+  board.id = 'board';
+  statuses.forEach(status => {
+    const list = byStatus.get(status);
+    const col = document.createElement('section');
+    col.className = 'board-col';
+    col.dataset.status = status;
+    const head = document.createElement('header');
+    const title = document.createElement('span');
+    title.className = 'board-col-title';
+    title.textContent = status;
+    const swatch = singleSelectSwatch(state.activeTable, 'Status', status);
+    if (swatch) title.style.setProperty('--dot', swatch.bg);
+    const count = document.createElement('span');
+    count.className = 'board-col-count';
+    count.textContent = list.length;
+    head.append(title, count);
+    const cards = document.createElement('div');
+    cards.className = 'board-cards';
+    list.slice(0, BOARD_CARD_LIMIT).forEach(rec => cards.append(boardCard(rec, ordered, today)));
+    if (list.length > BOARD_CARD_LIMIT) {
+      const more = document.createElement('div');
+      more.className = 'board-more';
+      more.textContent = `+${list.length - BOARD_CARD_LIMIT} more — use the table to see them all`;
+      cards.append(more);
+    }
+    col.append(head, cards);
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('drop-target'); });
+    col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('drop-target'); });
+    col.addEventListener('drop', e => {
+      e.preventDefault();
+      col.classList.remove('drop-target');
+      let ids = [];
+      try { ids = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+      if (Array.isArray(ids) && ids.length) moveToStatus(ids, status);
+    });
+    board.append(col);
+  });
+
+  const container = document.getElementById('records-container');
+  container.replaceChildren(board);
+  state.visibleRecords = ordered;
+  setStatus(`${recs.length} tasks on the board`);
+  updateBulkActionsBar();
+  renderTaskPanel();
+}
+
+function boardCard(rec, ordered, today) {
+  const card = document.createElement('article');
+  card.className = 'board-card';
+  card.draggable = true;
+  if (state.selectedIds.has(rec.id)) card.classList.add('bulk-selected');
+  if (state.selectedTask && state.selectedTask.id === rec.id) card.classList.add('selected');
+
+  const thumb = document.createElement('div');
+  thumb.className = 'board-thumb';
+  const url = previewUrl(rec, 'large');
+  if (url) {
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.alt = '';
+    img.src = url;
+    thumb.append(img);
+  } else {
+    thumb.innerHTML = iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image');
+  }
+  const body = document.createElement('div');
+  body.className = 'board-card-body';
+  const name = document.createElement('div');
+  name.className = 'board-card-name';
+  name.textContent = rec.fields['Name'] || 'Untitled task';
+  name.title = rec.fields['Name'] || '';
+  const meta = document.createElement('div');
+  meta.className = 'board-card-meta';
+  const pr = rec.fields['Priority'];
+  if (pr) {
+    const pill = document.createElement('span');
+    pill.className = 'select-pill';
+    pill.textContent = pr;
+    const sw = singleSelectSwatch(state.activeTable, 'Priority', pr);
+    if (sw) { pill.style.background = sw.bg; pill.style.color = sw.text; }
+    meta.append(pill);
+  }
+  const deadline = rec.fields['Deadline'];
+  if (deadline && rec.fields['Status'] !== 'To accept') {
+    const days = daysUntilDeadline(deadline, today);
+    const chip = document.createElement('span');
+    chip.className = `deadline-chip ${days < 0 ? 'overdue' : days <= 1 ? 'soon' : ''}`;
+    chip.innerHTML = iconSvg('clock');
+    chip.append(deadlineAlertLabel(deadline, today));
+    chip.title = deadline;
+    meta.append(chip);
+  }
+  if (rec.fields['Type']) {
+    const tag = document.createElement('span');
+    tag.className = 'meta-tag';
+    tag.textContent = rec.fields['Type'];
+    meta.append(tag);
+  }
+  body.append(name, meta);
+  card.append(thumb, body);
+
+  card.onclick = e => onRowClick(rec, card, e, ordered.indexOf(rec), ordered);
+  card.ondblclick = () => openRecordModal(rec, state.activeTable);
+  card.addEventListener('dragstart', e => {
+    const ids = state.selectedIds.has(rec.id) && state.selectedIds.size > 1 ? [...state.selectedIds] : [rec.id];
+    e.dataTransfer.setData('text/plain', JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+    card.classList.add('dragging');
+  });
+  card.addEventListener('dragend', () => card.classList.remove('dragging'));
+  return card;
+}
+
+// Sets Status on the given tasks (a board drop), then offers Undo.
+async function moveToStatus(ids, status) {
+  const tableInfo = state.tables[state.activeTable];
+  if (!tableInfo) return;
+  const recs = ids.map(id => state.records.find(r => r.id === id)).filter(r => r && r.fields['Status'] !== status);
+  if (!recs.length) return;
+  const before = recs.map(r => ({ id: r.id, status: r.fields['Status'] || null }));
+  try {
+    const results = await window.airtable.updateRecords(state.baseId, tableInfo.id,
+      recs.map(r => ({ id: r.id, fields: { Status: status } })));
+    const byId = new Map(results.map(r => [r.id, r]));
+    state.records.forEach(rec => {
+      const updated = byId.get(rec.id);
+      if (updated) rec.fields = updated.fields;
+    });
+    log(`moveToStatus: ${results.length} record(s) → ${status}`);
+    pruneCompletedDeadlineAlerts();
+    toast(`${results.length} task${results.length === 1 ? '' : 's'} → ${status}`, {
+      action: { label: 'Undo', run: () => restoreStatuses(before) },
+    });
+    render();
+    maybeRefreshDashboard();
+  } catch (err) {
+    toastError(`Could not move to ${status}: ${err.message}`);
+  }
+}
+
+// The task's Preview image from Airtable ('small' ≈ 36 px, 'large' ≈ 512 px),
+// or null when it has none.
+function previewUrl(rec, size) {
+  const att = (rec.fields['Preview'] || [])[0];
+  if (!att) return null;
+  return att.thumbnails?.[size]?.url || att.url || null;
+}
+
+// Table or board, remembered on this computer.
+const VIEW_KEY = 'higgtable_view';
+state.view = (() => { try { return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'table'; } catch { return 'table'; } })();
+
+// Packs the user folded away (by packKey), for this session.
+const collapsedPacks = new Set();
+
+// A pack's header row: fold toggle, what the pack is (concept, parent,
+// languages, day, size) and, with the working directory indexed, how many of
+// its tasks are ready. Clicking it selects the whole pack (Cmd/Ctrl-click adds
+// it to the selection), so Finish or Autofill can run on the pack at once.
+function renderPackHeader(tbody, members, colCount) {
+  const key = packKey(members[0]);
+  const collapsed = collapsedPacks.has(key);
+  const ids = members.map(r => r.id);
+  const allSelected = ids.every(id => state.selectedIds.has(id));
+  const tr = tbody.insertRow();
+  tr.className = `pack-header${collapsed ? ' collapsed' : ''}${allSelected ? ' selected-pack' : ''}`;
+  const td = tr.insertCell();
+  td.colSpan = colCount;
+
+  const toggle = document.createElement('button');
+  toggle.className = 'pack-toggle';
+  toggle.title = collapsed ? 'Show the tasks in this pack' : 'Fold this pack';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.innerHTML = iconSvg('down');
+  toggle.onclick = e => {
+    e.stopPropagation();
+    collapsed ? collapsedPacks.delete(key) : collapsedPacks.add(key);
+    render();
+  };
+
+  const s = packSummary(members);
+  const label = document.createElement('span');
+  label.className = 'pack-label';
+  const strong = document.createElement('strong');
+  strong.textContent = s.concept || 'Pack';
+  label.append(strong);
+  const bits = [
+    s.parent && `from ${s.parent}`,
+    s.languages.length && s.languages.join(' '),
+    s.date && `${s.date.slice(8, 10)}.${s.date.slice(5, 7)}`,
+    `${s.count} tasks`,
+  ].filter(Boolean);
+  const meta = document.createElement('span');
+  meta.className = 'pack-meta';
+  meta.textContent = bits.join(' · ');
+  label.append(meta);
+
+  td.append(toggle, label);
+  if (taskFileIndex) {
+    const ready = members.filter(r => readinessFor(r)?.ready).length;
+    const chip = document.createElement('span');
+    chip.className = `pack-ready${ready === members.length ? ' ok' : ''}`;
+    chip.textContent = `ready ${ready}/${members.length}`;
+    td.append(chip);
+  }
+  const hint = document.createElement('span');
+  hint.className = 'pack-select-hint';
+  hint.textContent = allSelected ? 'Selected' : 'Click to select the pack';
+  td.append(hint);
+
+  tr.onclick = e => {
+    if (!(e.metaKey || e.ctrlKey)) state.selectedIds.clear();
+    ids.forEach(id => state.selectedIds.add(id));
+    state.selectionAnchorId = ids[0];
+    state.selectionCursorId = ids[ids.length - 1];
+    state.selectedTask = members[0];
+    render();
+  };
 }
 
 // ── Bulk actions ─────────────────────────────────────────────────────────
@@ -1070,6 +1359,7 @@ function renderTaskPanel() {
   // Same markdown rendering as the task window (renderMarkdownLite escapes HTML).
   briefEl.innerHTML = description ? renderMarkdownLite(String(description)) : 'No brief';
   briefEl.classList.toggle('muted', !description);
+  renderTaskPanelCard(rec);
   renderTaskPanelLinks(rec);
 
   const line = (label, value, cls) => {
@@ -1106,6 +1396,56 @@ function renderTaskPanel() {
   if (r && r.handedIn) fieldsEl.append(line('Status', rec.fields['Status'], 'ok'));
 }
 
+// Top of the panel as a task card: the large Preview (click opens it full size
+// in the browser), then priority, status, the deadline as a countdown, Type and
+// Format.
+function renderTaskPanelCard(rec) {
+  const previewEl = document.getElementById('task-panel-preview');
+  previewEl.replaceChildren();
+  const large = previewUrl(rec, 'large');
+  previewEl.classList.toggle('empty', !large);
+  if (large) {
+    const img = document.createElement('img');
+    img.src = large;
+    img.alt = 'Preview';
+    img.title = 'Open full size';
+    img.onclick = () => window.app.openExternal(previewUrl(rec, 'full') || large);
+    previewEl.append(img);
+  } else {
+    previewEl.innerHTML = `${iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image')}<span>No preview yet</span>`;
+  }
+
+  const meta = document.getElementById('task-panel-meta');
+  meta.replaceChildren();
+  ['Priority', 'Status'].forEach(field => {
+    const val = rec.fields[field];
+    if (!val) return;
+    const pill = document.createElement('span');
+    pill.className = 'select-pill';
+    pill.textContent = val;
+    const swatch = singleSelectSwatch(state.activeTable, field, val);
+    if (swatch) { pill.style.background = swatch.bg; pill.style.color = swatch.text; }
+    meta.append(pill);
+  });
+  const deadline = rec.fields['Deadline'];
+  if (deadline && !COMPLETED_STATUSES.includes(rec.fields['Status'] || '')) {
+    const today = toISO(new Date());
+    const days = daysUntilDeadline(deadline, today);
+    const chip = document.createElement('span');
+    chip.className = `deadline-chip ${days < 0 ? 'overdue' : days <= 1 ? 'soon' : ''}`;
+    chip.innerHTML = iconSvg('clock');
+    chip.append(deadlineAlertLabel(deadline, today));
+    chip.title = deadline;
+    meta.append(chip);
+  }
+  [rec.fields['Type'], rec.fields['Format']].filter(Boolean).forEach(v => {
+    const tag = document.createElement('span');
+    tag.className = 'meta-tag';
+    tag.textContent = v;
+    meta.append(tag);
+  });
+}
+
 // Buttons for the task's links: Drive (Creative Link), Figma (Figma/Canvas
 // link) and REF, each shown only when the field has a link. Field names are
 // resolved against the live schema; LB spells its Figma column "Figmа Link"
@@ -1126,7 +1466,8 @@ function renderTaskPanelLinks(rec) {
     const url = field && String(rec.fields[field] || '').trim();
     if (!url || !/^https?:\/\//i.test(url)) return;
     const btn = document.createElement('button');
-    btn.textContent = `↗ ${label}`;
+    btn.innerHTML = iconSvg('external');
+    btn.append(label);
     btn.title = url;
     btn.addEventListener('click', () => window.app.openExternal(rewriteDriveLink(url, state.driveAccountIndex)));
     el.append(btn);
@@ -1205,8 +1546,7 @@ async function copyPanelBrief() {
   const btn = document.getElementById('task-panel-copy-brief-btn');
   if (!brief) return;
   await window.app.copyToClipboard(brief);
-  btn.textContent = '✓ Copied';
-  setTimeout(() => { btn.textContent = '⧉ Copy'; }, 1200);
+  flashCopied(btn, 1, 'Copied');
 }
 
 // Both bulk status actions differ only in the target status, the button they
@@ -1218,14 +1558,21 @@ async function copyPanelBrief() {
 // about when the work was completed. An existing Date Done is left alone rather
 // than cleared, which is safe because the dashboard filters on Status first (see
 // buildDashboardData) so a task back in progress is excluded either way.
-async function markSelectedAs(status, { btnId, label }) {
+async function markSelectedAs(status, { btnId, keepSelection = false }) {
   if (!state.selectedIds.size) return;
   const tableInfo = state.tables[state.activeTable];
   if (!tableInfo) return;
 
   const ids = [...state.selectedIds];
+  const before = ids.map(id => ({ id, status: state.records.find(r => r.id === id)?.fields['Status'] || null }));
   const btn = document.getElementById(btnId);
-  if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
+  // An icon-only button keeps its icon while busy (dimmed by :disabled); a text
+  // button says so. Either way its markup is put back exactly as it was.
+  const original = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    if (!btn.classList.contains('icon-btn')) btn.textContent = 'Updating...';
+  }
   try {
     const updates = ids.map(id => ({ id, fields: { Status: status } }));
     const results = await window.airtable.updateRecords(state.baseId, tableInfo.id, updates);
@@ -1235,30 +1582,54 @@ async function markSelectedAs(status, { btnId, label }) {
       if (updated) rec.fields = updated.fields;
     });
     log(`markSelectedAs: updated ${results.length} record(s) to ${status}`);
+    toast(`${results.length} task${results.length === 1 ? '' : 's'} → ${status}`, {
+      action: { label: 'Undo', run: () => restoreStatuses(before) },
+    });
     pruneCompletedDeadlineAlerts();
-    state.selectedIds.clear();
-    clearTaskSelection();
+    // Back to In work is usually a correction followed by more work on the same
+    // tasks, so the selection stays; handing in (To accept) clears it.
+    if (!keepSelection) {
+      state.selectedIds.clear();
+      clearTaskSelection();
+    }
     render();
     maybeRefreshDashboard();
   } catch (err) {
-    alert(`Failed to update some records: ${err.message}`);
+    toastError(`Failed to update some records: ${err.message}`);
     log(`markSelectedAs(${status}): FAILED — ${err.message}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (btn) { btn.disabled = false; btn.innerHTML = original; }
     updateBulkActionsBar();
   }
 }
 
+// Puts tasks back to the statuses they had (the Undo of a status change).
+async function restoreStatuses(before) {
+  const tableInfo = state.tables[state.activeTable];
+  if (!tableInfo || !before.length) return;
+  try {
+    const results = await window.airtable.updateRecords(state.baseId, tableInfo.id,
+      before.map(b => ({ id: b.id, fields: { Status: b.status } })));
+    const byId = new Map(results.map(r => [r.id, r]));
+    state.records.forEach(rec => {
+      const updated = byId.get(rec.id);
+      if (updated) rec.fields = updated.fields;
+    });
+    log(`restoreStatuses: put ${results.length} record(s) back`);
+    toast(`Undone: ${results.length} task${results.length === 1 ? '' : 's'} back`);
+    render();
+    maybeRefreshDashboard();
+  } catch (err) {
+    toastError(`Could not undo: ${err.message}`);
+  }
+}
+
 async function markSelectedAsToAccept() {
-  return markSelectedAs('To accept', {
-    btnId: 'bulk-mark-accept-btn', label: 'Mark as To Accept',
-  });
+  return markSelectedAs('To accept', { btnId: 'bulk-mark-accept-btn' });
 }
 
 async function markSelectedAsInWork() {
-  return markSelectedAs('In work', {
-    btnId: 'bulk-mark-inwork-btn', label: 'Mark as In Work',
-  });
+  return markSelectedAs('In work', { btnId: 'bulk-mark-inwork-btn', keepSelection: true });
 }
 
 // ── UI Components ────────────────────────────────────────────────────────
@@ -1632,9 +2003,9 @@ function openRecordModal(rec, tableName) {
 async function openCurrentTaskFolder(rec = currentDetailRecord) {
   const name = rec && rec.fields['Name'];
   if (!name) return;
-  if (!state.workingDirectory) { alert('Set a working directory first (⚙ Settings).'); return; }
+  if (!state.workingDirectory) { toastNeedsWorkingDirectory(); return; }
   const opened = await window.app.openTaskFolder(state.workingDirectory, name, stripAspectRatio(name));
-  if (!opened) alert(`No folder named "${name}" and no ${stripAspectRatio(name)}_9x16.mp4 in the working directory.`);
+  if (!opened) toast(`No folder named "${name}" and no ${stripAspectRatio(name)}_9x16.mp4 in the working directory.`);
 }
 
 function closeRecordModal() {
@@ -1749,7 +2120,8 @@ function appendTaskRefLinks(container, text, currentRecordId) {
 
     const btn = document.createElement('button');
     btn.className = 'task-ref-link';
-    btn.textContent = `${kind} ↗ ${match.name}`;
+    btn.innerHTML = iconSvg('external');
+    btn.append(`${kind} ${match.name}`);
     if (url) {
       btn.title = `Open ${fieldName} for ${match.name}`;
       btn.onclick = () => window.app.openExternal(rewriteDriveLink(url, state.driveAccountIndex));
@@ -2016,7 +2388,7 @@ function buildMultiSelectField(rec, tableName, field, val) {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'record-chip-remove';
-      remove.textContent = '×';
+      remove.innerHTML = iconSvg('close');
       remove.onclick = () => {
         current.delete(name);
         renderChips();
@@ -2129,7 +2501,7 @@ function flashFieldStatus(el, kind, errMsg) {
   } else if (kind === 'error') {
     el.classList.add('field-error');
     el.title = errMsg || 'Update failed';
-    alert(`Failed to save: ${errMsg}`);
+    toastError(`Failed to save: ${errMsg}`);
   }
 }
 
@@ -2180,7 +2552,7 @@ function renderTaskSearchResults() {
 
     const lineage = document.createElement('button');
     lineage.className = 'task-search-lineage';
-    lineage.textContent = '🕸';
+    lineage.innerHTML = iconSvg('lineage');
     lineage.title = `Open this task's lineage in Canvas`;
     lineage.onclick = () => {
       closeTaskSearch();
@@ -2202,14 +2574,230 @@ function closeTaskSearch({ clear = false } = {}) {
   if (clear) document.getElementById('task-search').value = '';
 }
 
-// Shows "✓" (or "✓ N") on a copy button for a moment: a clipboard write is
-// otherwise invisible. The icon is restored from data-label afterwards.
-function flashCopied(btn, count) {
+// ── Command palette (⌘K / Ctrl+K) ──────────────────────────────────────────
+// One box for actions and tasks: type a few letters of a command ("autofill",
+// "copy brief", "drive") or of a task name, arrow to it, Enter. Actions mostly
+// click the app's own buttons, so they behave exactly like the mouse.
+const clickById = id => () => document.getElementById(id)?.click();
+const hasSelection = () => state.selectedIds.size > 0;
+const hasTask = () => !!state.selectedTask;
+const openPanelLink = label => () => {
+  [...document.querySelectorAll('#task-panel-links button')].find(b => b.textContent.trim() === label)?.click();
+};
+const panelLinkExists = label => () =>
+  hasTask() && [...document.querySelectorAll('#task-panel-links button')].some(b => b.textContent.trim() === label);
+const PALETTE_COMMANDS = [
+  { label: 'Finish selected tasks', icon: 'play', when: hasSelection, run: clickById('bulk-finish-btn') },
+  { label: 'Resize', icon: 'expand', when: hasSelection, run: clickById('bulk-resize-btn') },
+  { label: 'Compress', icon: 'down', when: hasSelection, run: clickById('bulk-compress-btn') },
+  { label: 'Autofill', icon: 'check', when: hasSelection, run: clickById('bulk-autofill-btn') },
+  { label: 'Mark as To Accept', icon: 'check', when: hasSelection, run: clickById('bulk-mark-accept-btn') },
+  { label: 'Mark as In Work', icon: 'undo', when: hasSelection, run: clickById('bulk-mark-inwork-btn') },
+  { label: 'Copy name', hint: '⌘C', icon: 'copy', when: hasSelection, run: () => copySelectedTasks('name') },
+  { label: 'Copy name + brief', hint: '⌘⇧C', icon: 'brief', when: hasSelection, run: () => copySelectedTasks('brief') },
+  { label: 'Copy name + brief + REF', icon: 'link', when: hasSelection, run: () => copySelectedTasks('ref') },
+  { label: 'Open Drive link', icon: 'external', when: panelLinkExists('Drive'), run: openPanelLink('Drive') },
+  { label: 'Open Figma link', icon: 'external', when: panelLinkExists('Figma'), run: openPanelLink('Figma') },
+  { label: 'Open REF link', icon: 'external', when: panelLinkExists('REF'), run: openPanelLink('REF') },
+  { label: 'Open task folder', icon: 'folder', when: hasTask, run: clickById('task-panel-folder-btn') },
+  { label: 'Open all fields', icon: 'expand', when: hasTask, run: () => openRecordModal(state.selectedTask, state.activeTable) },
+  { label: 'Clear selection', icon: 'close', when: hasSelection, run: clickById('bulk-clear-btn') },
+  { label: 'Table view', icon: 'table', run: () => document.querySelector('#view-toggle [data-view="table"]').click() },
+  { label: 'Board view', icon: 'board', run: () => document.querySelector('#view-toggle [data-view="board"]').click() },
+  ...TARGET_TABLES.map(t => ({ label: `Go to ${t.replace(' Creatives', '')}`, icon: 'table', run: () => document.querySelector(`.tab[data-table="${t}"]`)?.click() })),
+  { label: 'Dashboard', icon: 'dashboard', run: clickById('dashboard-btn') },
+  { label: 'Workload', icon: 'workload', run: clickById('workload-btn') },
+  { label: 'Canvas', icon: 'lineage', run: clickById('canvas-btn') },
+  { label: 'Refresh this table', icon: 'refresh', run: clickById('refresh-btn') },
+  { label: 'Settings', icon: 'settings', run: clickById('settings-btn') },
+];
+let paletteItems = [];
+let paletteIndex = 0;
+
+function openPalette() {
+  const input = document.getElementById('palette-input');
+  input.value = '';
+  document.getElementById('palette').classList.remove('hidden');
+  renderPalette();
+  input.focus();
+}
+
+function closePalette() {
+  document.getElementById('palette').classList.add('hidden');
+}
+
+function renderPalette() {
+  const q = document.getElementById('palette-input').value.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
+  const commands = PALETTE_COMMANDS
+    .filter(c => !c.when || c.when())
+    .filter(c => words.every(w => c.label.toLowerCase().includes(w)))
+    .map(c => ({ kind: 'command', ...c }));
+  const tasks = q.length >= MIN_QUERY_LENGTH
+    ? searchTasks(q, allCachedRecordsForRefs(), { limit: 8 }).map(hit => ({
+      kind: 'task', label: hit.name, hint: hit.table.replace(' Creatives', ''),
+      icon: FORMAT_ICONS[hit.format] || 'image',
+      run: () => goToRecord(hit.rec, hit.table),
+    }))
+    : [];
+  paletteItems = [...commands.slice(0, q ? 8 : 12), ...tasks];
+  paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
+  if (!q) paletteIndex = 0;
+
+  const list = document.getElementById('palette-list');
+  list.replaceChildren();
+  if (!paletteItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'palette-empty';
+    empty.textContent = 'Nothing matches';
+    list.append(empty);
+    return;
+  }
+  let lastKind = null;
+  paletteItems.forEach((item, i) => {
+    if (item.kind !== lastKind) {
+      const group = document.createElement('div');
+      group.className = 'palette-group';
+      group.textContent = item.kind === 'task' ? 'Tasks' : 'Actions';
+      list.append(group);
+      lastKind = item.kind;
+    }
+    const row = document.createElement('div');
+    row.className = `palette-item${i === paletteIndex ? ' active' : ''}${item.kind === 'task' ? ' task' : ''}`;
+    row.setAttribute('role', 'option');
+    row.innerHTML = iconSvg(item.icon);
+    const label = document.createElement('span');
+    label.className = 'palette-label';
+    label.textContent = item.label;
+    row.append(label);
+    if (item.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'palette-hint';
+      hint.textContent = item.hint;
+      row.append(hint);
+    }
+    row.onmousemove = () => { if (paletteIndex !== i) { paletteIndex = i; highlightPalette(); } };
+    row.onclick = () => runPaletteItem(i);
+    list.append(row);
+  });
+}
+
+function highlightPalette() {
+  document.querySelectorAll('#palette-list .palette-item').forEach((el, i) => el.classList.toggle('active', i === paletteIndex));
+  document.querySelector('#palette-list .palette-item.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function runPaletteItem(i) {
+  const item = paletteItems[i];
+  if (!item) return;
+  closePalette();
+  log(`palette: ${item.kind} "${item.label}"`);
+  item.run();
+}
+
+// ── Toasts ──────────────────────────────────────────────────────────────
+// Short notices in the bottom-right corner instead of blocking alert() boxes.
+// Info fades after a few seconds; an error stays until it is closed. An
+// optional action button (e.g. Undo) runs once and closes the toast.
+function toast(message, { type = 'info', action = null, duration } = {}) {
+  const stack = document.getElementById('toast-stack');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.innerHTML = iconSvg(type === 'error' ? 'warning' : 'check');
+  const text = document.createElement('div');
+  text.className = 'toast-text';
+  text.textContent = String(message);
+  el.append(text);
+  const close = () => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 200);
+  };
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.onclick = () => { close(); action.run(); };
+    el.append(btn);
+  }
+  const x = document.createElement('button');
+  x.className = 'toast-close';
+  x.title = 'Close';
+  x.setAttribute('aria-label', 'Close');
+  x.innerHTML = iconSvg('close');
+  x.onclick = close;
+  el.append(x);
+  stack.append(el);
+  const ms = duration ?? (type === 'error' ? 0 : action ? 8000 : 4000);
+  if (ms) setTimeout(close, ms);
+  log(`toast(${type}): ${String(message).split('\n')[0]}`);
+  return el;
+}
+
+function toastError(message) {
+  return toast(message, { type: 'error' });
+}
+
+function toastNeedsWorkingDirectory() {
+  toast('Set a working directory first.', { action: { label: 'Open Settings', run: () => showSettingsModal() } });
+}
+
+// Shows a check (with the count, or a short message) on a button for a moment:
+// a clipboard write is otherwise invisible. The button's own markup, icon
+// included, is put back afterwards.
+function flashCopied(btn, count, message) {
   if (!btn) return;
-  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
-  btn.textContent = count > 1 ? `✓ ${count}` : '✓';
+  if (btn._flashOriginal == null) btn._flashOriginal = btn.innerHTML;
+  btn.innerHTML = message ? '' : iconSvg('check');
+  const extra = message || (count > 1 ? String(count) : '');
+  if (extra) btn.append(extra);
+  btn.classList.add('flashed');
   clearTimeout(btn._flashTimer);
-  btn._flashTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1200);
+  btn._flashTimer = setTimeout(() => {
+    btn.innerHTML = btn._flashOriginal;
+    btn._flashOriginal = null;
+    btn.classList.remove('flashed');
+  }, 1200);
+}
+
+// The side panel's width follows a drag on its left edge and is remembered on
+// this computer; a double-click puts it back to the default.
+const PANEL_WIDTH_KEY = 'higgtable_panel_width';
+const PANEL_MIN_WIDTH = 280;
+function initTaskPanelResizer() {
+  const panel = document.getElementById('task-panel');
+  const handle = document.getElementById('task-panel-resizer');
+  const clamp = w => Math.round(Math.min(Math.max(w, PANEL_MIN_WIDTH), window.innerWidth * 0.6));
+  const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+  if (saved) panel.style.width = `${clamp(saved)}px`;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const right = panel.getBoundingClientRect().right;
+    document.body.classList.add('resizing-panel');
+    const move = ev => { panel.style.width = `${clamp(right - ev.clientX)}px`; };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.classList.remove('resizing-panel');
+      localStorage.setItem(PANEL_WIDTH_KEY, String(parseInt(panel.style.width, 10)));
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  handle.addEventListener('dblclick', () => {
+    panel.style.width = '';
+    localStorage.removeItem(PANEL_WIDTH_KEY);
+  });
+}
+
+// Puts each [data-icon] element's icon in front of its label (once). An
+// icon-only button gets its tooltip as its accessible name.
+function applyIcons(root) {
+  root.querySelectorAll('[data-icon]').forEach(el => {
+    if (el.querySelector(':scope > .icon-svg')) return;
+    if (!el.textContent.trim() && el.title && !el.hasAttribute('aria-label')) el.setAttribute('aria-label', el.title);
+    el.insertAdjacentHTML('afterbegin', iconSvg(el.dataset.icon));
+  });
 }
 
 // Copies the selected tasks, sorted by name so a multi-row copy lands in the
@@ -2234,7 +2822,7 @@ async function copySelectedTasks(kind) {
     flashCopied(document.getElementById(COPY_BUTTONS[kind]), recs.length);
     log(`copySelectedTasks(${kind}): copied ${recs.length} task(s)`);
   } catch (err) {
-    alert(`Could not copy: ${err.message}`);
+    toastError(`Could not copy: ${err.message}`);
     log(`copySelectedTasks(${kind}): FAILED — ${err.message}`);
   }
 }
@@ -2245,17 +2833,15 @@ async function copyOpenTaskBrief() {
   const btn = document.getElementById('copy-brief-btn');
   const brief = briefFromDescription(currentDetailRecord.fields['Description']);
   if (!brief) {
-    btn.textContent = 'No brief';
-    setTimeout(() => { btn.textContent = '⧉ Copy brief'; }, 1200);
+    flashCopied(btn, 0, 'No brief');
     return;
   }
   try {
     await window.app.copyToClipboard(brief);
-    btn.textContent = '✓ Copied';
-    setTimeout(() => { btn.textContent = '⧉ Copy brief'; }, 1200);
+    flashCopied(btn, 1, 'Copied');
     log(`copyOpenTaskBrief: copied the brief of ${currentDetailRecord.fields['Name'] || currentDetailRecord.id}`);
   } catch (err) {
-    alert(`Could not copy: ${err.message}`);
+    toastError(`Could not copy: ${err.message}`);
     log(`copyOpenTaskBrief: FAILED — ${err.message}`);
   }
 }
@@ -2457,7 +3043,8 @@ function renderFileList() {
   const dupes = ratios.filter((r, i) => ratios.indexOf(r) !== i);
   const warn = document.getElementById('rename-warning');
   if (dupes.length) {
-    warn.textContent = `⚠ Duplicate ratio: ${[...new Set(dupes)].join(', ')}`;
+    warn.innerHTML = iconSvg('warning');
+    warn.append(`Duplicate ratio: ${[...new Set(dupes)].join(', ')}`);
   } else {
     warn.textContent = '';
   }
@@ -2487,10 +3074,10 @@ const PREVIEW_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 async function performRename() {
   const fullTaskName = state.selectedTask ? (state.selectedTask.fields['Name'] || '') : '';
   const taskName = stripAspectRatio(fullTaskName);
-  if (!taskName) { alert('No task selected.'); return; }
+  if (!taskName) { toast('No task selected.'); return; }
 
   const toRename = state.pendingFiles.filter(f => !f.error);
-  if (!toRename.length) { alert('No valid files to rename.'); return; }
+  if (!toRename.length) { toast('No valid files to rename.'); return; }
 
   const errors = [];
   let renamed = 0;
@@ -2531,9 +3118,9 @@ async function performRename() {
   }
 
   if (errors.length) {
-    alert(`Renamed ${renamed} file(s).\n\nErrors:\n${errors.join('\n')}${previewNote}`);
+    toastError(`Renamed ${renamed} file(s).\n\nErrors:\n${errors.join('\n')}${previewNote}`);
   } else {
-    alert(`Done! Renamed ${renamed} file(s).${previewNote}`);
+    toast(`Done! Renamed ${renamed} file(s).${previewNote}`);
     clearTaskSelection();
   }
 }
@@ -2570,7 +3157,7 @@ let pendingAutofillCandidates = [];
 
 async function openAutofillModal() {
   if (!state.workingDirectory) {
-    alert('Set a working directory first (⚙ Settings).');
+    toastNeedsWorkingDirectory();
     return;
   }
   // Runs over the selection, which a plain click now populates with the one
@@ -2637,14 +3224,14 @@ async function openAutofillModal() {
     }));
 
     if (!pendingAutofillCandidates.some(c => c.preview || c.timing)) {
-      alert('No preview image or video found for the selected tasks.\n\nSearched every aspect ratio (1x1, 9x16, 4x5, 16x9, ...) as .png/.jpg/.jpeg, and .mp4 video, under the working directory.');
+      toast('No preview image or video found for the selected tasks.\n\nSearched every aspect ratio (1x1, 9x16, 4x5, 16x9, ...) as .png/.jpg/.jpeg, and .mp4 video, under the working directory.');
       return;
     }
 
     await renderAutofillApprovalList();
     document.getElementById('autofill-approval-modal').classList.remove('hidden');
   } catch (err) {
-    alert(`Autofill failed: ${err.message}`);
+    toastError(`Autofill failed: ${err.message}`);
     log(`openAutofillModal: FAILED — ${err.message}`);
   } finally {
     btn.disabled = false;
@@ -2761,7 +3348,7 @@ function renderLinkPairs() {
     const up = document.createElement('button');
     up.className = 'link-pair-move';
     up.type = 'button';
-    up.textContent = '↑';
+    up.innerHTML = iconSvg('up');
     up.title = 'Move this link one task earlier';
     up.disabled = i === 0;
     up.onclick = (e) => { e.preventDefault(); move(i, i - 1); };
@@ -2770,7 +3357,7 @@ function renderLinkPairs() {
     const down = document.createElement('button');
     down.className = 'link-pair-move';
     down.type = 'button';
-    down.textContent = '↓';
+    down.innerHTML = iconSvg('down');
     down.title = 'Move this link one task later';
     down.disabled = i === paired.pairs.length - 1;
     down.onclick = (e) => { e.preventDefault(); move(i, i + 1); };
@@ -2977,14 +3564,14 @@ async function confirmAutofill() {
     ? resolveFieldName((tableInfo?.fields || []).map(f => f.name), FIGMA_LINK_FIELD)
     : null;
   if (figmaLink && !figmaField) {
-    alert(`This table has no "${FIGMA_LINK_FIELD}" field, so the link cannot be saved.\n\nNothing was written.`);
+    toastError(`This table has no "${FIGMA_LINK_FIELD}" field, so the link cannot be saved.\n\nNothing was written.`);
     return;
   }
 
   const linkPairs = pendingLinkPairs.filter(p => p.include && p.link);
   const creativeField = linkPairs.length ? creativeLinkFieldName() : null;
   if (linkPairs.length && !creativeField) {
-    alert(`This table has no "${CREATIVE_LINK_FIELD}" field, so the pasted links cannot be saved.\n\nNothing was written.`);
+    toastError(`This table has no "${CREATIVE_LINK_FIELD}" field, so the pasted links cannot be saved.\n\nNothing was written.`);
     return;
   }
 
@@ -3053,7 +3640,7 @@ async function confirmAutofill() {
         log(`confirmAutofill: updated ${results.length} record(s) — Timing ${timed}, Hours ${hoursSet}, ${FIGMA_LINK_FIELD} ${linked}, ${CREATIVE_LINK_FIELD} ${creativeLinked}, Date Done ${dated}`);
       } catch (err) {
         log(`confirmAutofill: batched update FAILED — ${err.message}`);
-        alert(`Previews uploaded, but the Timing / Hours / link / Date Done update failed:\n\n${err.message}`);
+        toastError(`Previews uploaded, but the Timing / Hours / link / Date Done update failed:\n\n${err.message}`);
       }
     }
 
@@ -3129,7 +3716,7 @@ async function openResizeModal(mode = 'resize', { chain = false } = {}) {
     return;
   }
   if (!state.workingDirectory) {
-    alert('Set a working directory first (⚙ Settings).');
+    toastNeedsWorkingDirectory();
     return;
   }
   // Name order, like Autofill, so the two dialogs list a selection the same way.
@@ -3180,7 +3767,7 @@ async function openResizeModal(mode = 'resize', { chain = false } = {}) {
     document.getElementById('resize-modal').classList.remove('hidden');
     await inspectResizeTasks();
   } catch (err) {
-    alert(`${mode === 'compress' ? 'Compress' : 'Resize'} failed: ${err.message}`);
+    toastError(`${mode === 'compress' ? 'Compress' : 'Resize'} failed: ${err.message}`);
     log(`openResizeModal(${mode}): FAILED — ${err.message}`);
   } finally {
     btn.disabled = false;
@@ -3284,7 +3871,7 @@ function renderResizeModal() {
     if (removable) {
       const x = document.createElement('span');
       x.className = 'resize-chip-remove';
-      x.textContent = '×';
+      x.innerHTML = iconSvg('close');
       x.title = 'Forget this size';
       chip.appendChild(x);
     }
@@ -3314,7 +3901,7 @@ function renderResizeModal() {
       const folder = document.createElement('button');
       folder.className = 'resize-row-folder';
       folder.dataset.path = task.source;
-      folder.textContent = '📂';
+      folder.innerHTML = iconSvg('folder');
       folder.title = 'Show the 9x16 source in its folder';
       name.appendChild(folder);
     }
@@ -3502,7 +4089,7 @@ async function startResize() {
       log(`startResize: finished — ${JSON.stringify(s.lastRun)}`);
     }
   } catch (err) {
-    alert(`${compress ? 'Compress' : 'Resize'} failed: ${err.message}`);
+    toastError(`${compress ? 'Compress' : 'Resize'} failed: ${err.message}`);
     log(`startResize: FAILED — ${err.message}`);
     s.tasks.forEach(t => { if (['waiting', 'rendering', 'compressing'].includes(t.state)) t.state = null; });
   } finally {
@@ -3551,7 +4138,7 @@ async function finishSelected() {
   } else if (next === 'accept') {
     if (confirm(`Everything is filled. Mark ${selected.length} task(s) as To Accept?`)) await markSelectedAsToAccept();
   } else {
-    alert('The selected tasks are already handed in.');
+    toast('The selected tasks are already handed in.');
   }
 }
 
@@ -3605,6 +4192,40 @@ async function saveSettings() {
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────
+
+applyIcons(document);
+initTaskPanelResizer();
+document.addEventListener('keydown', e => {
+  if (e.code === 'KeyK' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+    e.preventDefault();
+    document.getElementById('palette').classList.contains('hidden') ? openPalette() : closePalette();
+  }
+});
+document.getElementById('palette-input').addEventListener('input', () => { paletteIndex = 0; renderPalette(); });
+document.getElementById('palette-input').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = paletteItems.length;
+    if (n) paletteIndex = (paletteIndex + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    highlightPalette();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    runPaletteItem(paletteIndex);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePalette();
+  }
+});
+document.getElementById('palette').addEventListener('mousedown', e => {
+  if (e.target.id === 'palette') closePalette();
+});
+document.getElementById('view-toggle').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn || btn.dataset.view === state.view) return;
+  state.view = btn.dataset.view;
+  try { localStorage.setItem(VIEW_KEY, state.view); } catch { /* per-viewer convenience only */ }
+  render();
+});
 
 document.getElementById('tabs').addEventListener('click', e => {
   const btn = e.target.closest('.tab');
@@ -3702,7 +4323,7 @@ document.getElementById('bulk-finish-btn').addEventListener('click', finishSelec
 // Shift-click extends the row selection; without this the browser also
 // selects the text between the two clicks, painting the table blue.
 document.getElementById('records-container').addEventListener('mousedown', e => {
-  if (e.shiftKey && e.target.closest('tbody tr')) e.preventDefault();
+  if (e.shiftKey && e.target.closest('tbody tr, .board-card')) e.preventDefault();
 });
 // ⌘C / Ctrl+C copies the selected task names, ⌘⇧C / Ctrl+Shift+C names + briefs.
 // e.code, not e.key, so it works on any keyboard layout (Ukrainian "с" too).

@@ -15,9 +15,9 @@
         <button class="tab" data-table="CMC Creatives">CMC</button>
         <button class="tab" data-table="LB Creatives">LB</button>
         <button class="tab" data-table="OMGF Creatives">OMGF</button>
-        <button id="dashboard-btn" class="tab" title="Task completion dashboard">📊 Dashboard</button>
-        <button id="workload-btn" class="tab" title="Open tasks per designer, for the manager">👥 Workload</button>
-        <button id="canvas-btn" class="tab" title="Lineage canvas — see how creatives branch from one another">🕸 Canvas</button>
+        <button id="dashboard-btn" class="tab" title="Task completion dashboard" data-icon="dashboard">Dashboard</button>
+        <button id="workload-btn" class="tab" title="Open tasks per designer, for the manager" data-icon="workload">Workload</button>
+        <button id="canvas-btn" class="tab" title="Lineage canvas — see how creatives branch from one another" data-icon="lineage">Canvas</button>
       </nav>
       <div id="header-actions">
         <button id="columns-btn" title="Choose which columns to show">
@@ -72,6 +72,10 @@
     <div id="header-filters">
       <div id="status-filters"></div>
       <div id="header-filters-right">
+        <div id="view-toggle" role="group" aria-label="View">
+          <button data-view="table" data-icon="table" title="Table view">Table</button>
+          <button data-view="board" data-icon="board" title="Board view: drag cards between statuses">Board</button>
+        </div>
         <div id="task-search-control">
           <input type="text" id="task-search" placeholder="Search tasks…" autocomplete="off" spellcheck="false"
                  title="Search every loaded table by task name (Cmd/Ctrl+F)">
@@ -97,29 +101,32 @@
     <button id="bulk-autofill-btn" class="step-btn" data-step="autofill" title="Fill Preview, Timing, Hours and links for the selected tasks from the working directory">Autofill</button>
     <span class="step-arrow">›</span>
     <button id="bulk-mark-accept-btn" class="step-btn" data-step="accept" title="Hand the selected tasks in">Mark as To Accept</button>
-    <button id="bulk-finish-btn" title="Run only the steps the selected tasks still need, in order: Resize, Compress, Autofill, To Accept">▶ Finish</button>
+    <button id="bulk-finish-btn" title="Run only the steps the selected tasks still need, in order: Resize, Compress, Autofill, To Accept" data-icon="play">Finish</button>
     <div id="extra-actions">
-      <button id="bulk-mark-inwork-btn" class="icon-btn" title="Mark as In Work: move the selected tasks back to the In work status">↩</button>
-      <button id="bulk-copy-name-btn" class="icon-btn" title="Copy name (⌘C / Ctrl+C)">⧉</button>
-      <button id="bulk-copy-brief-btn" class="icon-btn" title="Copy name + brief (⌘⇧C / Ctrl+Shift+C)">📋</button>
-      <button id="bulk-copy-ref-btn" class="icon-btn" title="Copy name + brief + REF link">🔗</button>
-      <button id="bulk-clear-btn" class="icon-btn" title="Clear selection">✕</button>
+      <button id="bulk-mark-inwork-btn" class="icon-btn" title="Mark as In Work: move the selected tasks back to the In work status" data-icon="undo"></button>
+      <button id="bulk-copy-name-btn" class="icon-btn" title="Copy name (⌘C / Ctrl+C)" data-icon="copy"></button>
+      <button id="bulk-copy-brief-btn" class="icon-btn" title="Copy name + brief (⌘⇧C / Ctrl+Shift+C)" data-icon="brief"></button>
+      <button id="bulk-copy-ref-btn" class="icon-btn" title="Copy name + brief + REF link" data-icon="link"></button>
+      <button id="bulk-clear-btn" class="icon-btn" title="Clear selection" data-icon="close"></button>
     </div>
   </div>
 
   <div id="workspace">
   <main id="records-container"><p class="empty">Enter your API key to get started.</p></main>
   <aside id="task-panel" class="hidden">
+    <div id="task-panel-resizer" title="Drag to resize · double-click to reset"></div>
     <div id="task-panel-header">
       <strong id="task-panel-title"></strong>
-      <button id="task-panel-folder-btn" title="Open this task's folder">📂</button>
-      <button id="task-panel-details-btn" title="Open all fields (same as double-click)">↗</button>
-      <button id="task-panel-close-btn" title="Close">×</button>
+      <button id="task-panel-folder-btn" title="Open this task's folder" data-icon="folder" class="icon-only"></button>
+      <button id="task-panel-details-btn" title="Open all fields (same as double-click)" data-icon="expand" class="icon-only"></button>
+      <button id="task-panel-close-btn" title="Close" data-icon="close" class="icon-only"></button>
     </div>
     <div id="task-panel-multi" class="hidden"></div>
     <div id="task-panel-body">
+      <div id="task-panel-preview"></div>
+      <div id="task-panel-meta"></div>
       <div id="task-panel-links"></div>
-      <div class="task-panel-label">Brief <button id="task-panel-copy-brief-btn">⧉ Copy</button></div>
+      <div class="task-panel-label">Brief <button id="task-panel-copy-brief-btn" data-icon="copy">Copy</button></div>
       <div id="task-panel-brief"></div>
       <div class="task-panel-label">Files in the working directory</div>
       <div id="task-panel-files"></div>
@@ -129,7 +136,7 @@
     <div id="rename-panel" class="hidden">
       <div id="rename-header">
         <span id="rename-task-label">Task: <strong id="rename-task-name">—</strong></span>
-        <button id="rename-panel-close" title="Close">×</button>
+        <button id="rename-panel-close" title="Close" data-icon="close" class="icon-only"></button>
       </div>
       <div id="drop-zone">
         Drop files here or <button id="browse-files-btn">browse</button>
@@ -165,7 +172,7 @@
         <input type="date" id="dashboard-to">
       </span>
       <span id="dashboard-range-label"></span>
-      <button id="dashboard-refresh-btn" title="Refresh dashboard data">⟳</button>
+      <button id="dashboard-refresh-btn" title="Refresh dashboard data" data-icon="refresh" class="icon-only"></button>
     </div>
     <div id="dashboard-table-area"></div>
   </div>
@@ -191,10 +198,10 @@
     </div>
     <div id="canvas-tree-view" class="hidden">
       <div id="canvas-tree-header">
-        <button id="canvas-back-btn" title="Back to lineage list">← Back</button>
+        <button id="canvas-back-btn" title="Back to lineage list" data-icon="back">Back</button>
         <span id="canvas-tree-title"></span>
-        <button id="canvas-zoom-out-btn" title="Zoom out">−</button>
-        <button id="canvas-zoom-in-btn" title="Zoom in">+</button>
+        <button id="canvas-zoom-out-btn" title="Zoom out" data-icon="minus" class="icon-only"></button>
+        <button id="canvas-zoom-in-btn" title="Zoom in" data-icon="plus" class="icon-only"></button>
       </div>
       <div id="canvas-viewport">
         <div id="canvas-content">
@@ -236,11 +243,11 @@
     <div class="modal-box record-modal-box">
       <div class="record-modal-header">
         <h2 id="record-modal-title">Task details</h2>
-        <button id="copy-brief-btn" title="Copy this task's brief (Description) to the clipboard">⧉ Copy brief</button>
-        <button id="open-folder-btn" title="Open this task's folder in the working directory">📂 Folder</button>
-        <button id="view-lineage-btn" title="See this task's full lineage">🕸 View lineage</button>
-        <button id="record-fields-settings-btn" title="Choose which fields to show">⚙</button>
-        <button id="record-modal-close" title="Close">×</button>
+        <button id="copy-brief-btn" title="Copy this task's brief (Description) to the clipboard" data-icon="copy">Copy brief</button>
+        <button id="open-folder-btn" title="Open this task's folder in the working directory" data-icon="folder">Folder</button>
+        <button id="view-lineage-btn" title="See this task's full lineage" data-icon="lineage">View lineage</button>
+        <button id="record-fields-settings-btn" title="Choose which fields to show" data-icon="settings" class="icon-only"></button>
+        <button id="record-modal-close" title="Close" data-icon="close" class="icon-only"></button>
       </div>
       <div id="record-modal-body"></div>
     </div>
@@ -326,6 +333,17 @@
     </div>
   </div>
 
+  <div id="palette" class="modal-overlay hidden">
+    <div id="palette-box" role="dialog" aria-label="Command palette">
+      <div id="palette-input-row">
+        <span data-icon="search"></span>
+        <input type="text" id="palette-input" placeholder="Type a command or a task name…" autocomplete="off" spellcheck="false">
+        <kbd>esc</kbd>
+      </div>
+      <div id="palette-list" role="listbox"></div>
+    </div>
+  </div>
+  <div id="toast-stack" aria-live="polite"></div>
   <script src="notifications-data.js"></script>
   <script src="dashboard-data.js"></script>
   <script src="markdown-data.js"></script>
@@ -339,6 +357,8 @@
   <script src="resize-plan.js"></script>
   <script src="readiness-data.js"></script>
   <script src="records-sync.js"></script>
+  <script src="icons.js"></script>
+  <script src="pack-data.js"></script>
   <script src="app.js"></script>
   <script src="canvas-data.js"></script>
   <script src="canvas.js"></script>
