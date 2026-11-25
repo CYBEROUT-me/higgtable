@@ -10,10 +10,13 @@ An internal Electron desktop app for the UT marketing team (macOS + Windows).
 It reads the **UT Marketing Team** Airtable base and helps designers work their
 creative tasks:
 
-- browse each app's Creatives table, filter by status and designer
+- browse each app's Creatives table as a table (tasks grouped into packs, with
+  preview thumbnails) or a board, filter by status and designer
 - rename rendered media to the task's naming convention, and fix off-ratio statics
-- **Autofill**: upload previews, set Timing, paste Creative Links, stamp Date Done
-- dashboard of completed work, lineage canvas, new-task notifications
+- Resize / Compress videos, then **Autofill**: upload previews, set Timing and
+  Hours, paste Creative Links, stamp Date Done
+- dashboard of completed work, manager workload view, lineage canvas, new-task
+  and deadline notifications, a ⌘K command palette
 
 Owner: Oleksandr (GitHub `CYBEROUT-me`). Releases are published to
 `github.com/CYBEROUT-me/higgtable`, and coworkers install them from there.
@@ -77,10 +80,11 @@ preload.js     contextBridge: exposes window.airtable.* and window.app.* to the 
 renderer/
   index.html   All markup, including the modals. The <script> order at the bottom matters.
   styles.css
-  app.js       The renderer (~2.7k lines): state, loading, rendering, every feature's UI.
+  app.js       The renderer (~4.6k lines): state, loading, rendering, every feature's UI.
   canvas.js    Lineage canvas DOM, pan and zoom. Shares app.js's global scope.
   *-data.js, ratio-fix.js, task-refs.js, task-search.js, link-paste.js, drive-links.js,
-  resize-plan.js (also required by main.js to build the ffmpeg command)
+  records-sync.js, icons.js, resize-plan.js (also required by main.js to build the
+  ffmpeg command)
                PURE modules (no DOM, no IO), each with a Jest test in tests/.
 tests/         Jest tests, one per pure module plus airtable.test.js.
 docs/superpowers/specs, plans   Historical design docs and plans (several describe
@@ -104,7 +108,8 @@ if (typeof module !== 'undefined' && module.exports) {
 The browser loads it with a `<script>` tag **before `app.js`**, so its functions
 are globals there. Jest `require`s the same file. Add the `<script>` tag in
 `index.html` (current order: notifications-data, dashboard-data, markdown-data,
-drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data, resize-plan, readiness-data, records-sync, app,
+drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data,
+workload-data, resize-plan, readiness-data, records-sync, icons, pack-data, app,
 canvas-data, canvas) and add `tests/<name>.test.js`.
 
 ### Process boundary
@@ -131,7 +136,9 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   Airtable page are logged there.
 - renderer `localStorage`: `higgtable_des` (the selected designer),
   `higgtable_hidden_fields`, `higgtable_seen_ids_v1`,
-  `higgtable_notifications_v1`, `higgtable_notify_muted`.
+  `higgtable_notifications_v1`, `higgtable_notify_muted`,
+  `higgtable_deadline_alerts_v1` (deadline alerts already raised),
+  `higgtable_view` (`table` | `board`), `higgtable_panel_width`.
 
 ## Airtable
 
@@ -140,13 +147,21 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   `LB Creatives`, `OMGF Creatives`. Tabs in `index.html` mirror that list, so
   adding a table means editing both.
 - Fields the app relies on: `Name`, `Status`, `DES` (designer), `Priority`,
-  `Deadline`, `Format` (`Stat` vs `Video`), `Type`, `Preview` (attachment),
-  `Timing` (single select), `Creative Link`, `Figma/Canvas link`,
-  `Date Done` (YYYY-MM-DD), `Hours` (duration "H:MM"), `Old ID` / `New ID`
+  `Deadline`, `Format` (`Stat` vs `Video`), `Type`, `Preview` (attachment;
+  its `thumbnails.small/large/full` feed the table, board and panel),
+  `Timing` (single select), `Creative Link`, `Figma/Canvas link` (LB spells it
+  `Figmа Link` with a **Cyrillic "а"**, so `resolveFieldName` misses it; the
+  panel falls back to any "Fig… link" column), `REF` (url), `Project` (single
+  select: the product, e.g. TL/OL/LO; the Workload filter), `Date` (task day),
+  `Date Done` (YYYY-MM-DD), `Hours` (a **single select** of "HH:MM" choices in
+  15-minute steps, 00:15–06:00, not a duration), `Old ID` / `New ID`
   (lineage), `Description` (markdown long text; Airtable escapes punctuation
   as `\_`, which `markdown-data.js`/`task-search.js` undo).
-- Statuses used: `Ready for Design`, `In work` (the default filter), `To accept`,
-  `Done`. The dashboard counts `Done` + `To accept` by `Date Done`.
+- Task names: `APP_<New ID>_<Old ID>_<Model>_<Script>_<LANG>_<branch>_…_<Format>_<Type>_<Concept>_<ratio>`,
+  e.g. `LO_15945_13140_M0_S0_GR_usr_ARI_ILU_Video_VAR_Mix_9x16`.
+- Statuses: `Backlog`, `Rework`, `Ready for Design`, `In work` (the default
+  filter), `To accept`, `Done`. The dashboard counts `Done` + `To accept` by
+  `Date Done`; Workload counts `Ready for Design` + `In work`.
 - Field names that vary between tables are resolved against the live schema
   with `resolveFieldName` (task-refs.js). A missing field fails loudly
   instead of writing silently to nothing.
@@ -169,15 +184,19 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
 - **Table view** (`render()`): status chips, a designer picker ("You:"),
   sortable columns, a column chooser, Airtable select colours. Click selects
   one row; Cmd/Ctrl-click toggles; Shift-click selects a range.
-- **Step bar + side panel** (branch `ui-redesign`): the action bar reads as the
+- **Step bar + side panel**: the action bar reads as the
   workflow, Resize › Compress › Autofill › To Accept, each step showing what is
   left for the selection (`renderStepButtons`); the next step is outlined. Rare
-  actions (Mark as In Work, Copy name, Copy name + brief, Clear) sit in the ⋯
-  menu. "Ready" is computed in `readiness-data.js` from one walk of the working
+  actions sit at the right as icon-only buttons (`#extra-actions`): ↩ Mark as
+  In Work, Copy name, Copy name + brief, Copy name + brief + REF, Clear.
+  "Ready" is computed in `readiness-data.js` from one walk of the working
   directory (`index-task-files` IPC, refreshed on focus at most every 30 s and
   after runs) plus the record's fields; it also feeds the table's Ready column.
-  A single click opens `#task-panel` on the right: brief (copy), files with
-  sizes, fields, and the rename drop zone (moved there from the bottom bar).
+  A single click opens `#task-panel` on the right, laid out as a task card:
+  the large Preview (click opens it full size), priority / status / deadline
+  countdown / Type / Format, Drive · Figma · REF link buttons, the brief
+  (copy), files with sizes, fields, and the rename drop zone. Its width is
+  draggable (left edge) and remembered.
   Double-click still opens the full field editor. Several selected → the panel
   lists them all with what each needs. ↑/↓ move through tasks, Shift extends.
   **▶ Finish** starts at the first step still needed; Resize/Compress opened
@@ -195,9 +214,38 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   or more selected rows. With nothing selected it stays in place, **greyed
   and inactive at the same size** (class `inactive`), so rows never jump. Don't
   name it `empty`, which collides with the `.empty` utility class. The owner
-  rejected both a shrunken bar and empty space. Buttons: Mark as To Accept,
-  Mark as In Work, Autofill, Resize, Compress, ⧉ Copy name (via clipboard
-  IPC), Clear selection. The Mark buttons do **not** touch Date Done.
+  rejected both a shrunken bar and empty space. The Mark buttons do **not**
+  touch Date Done. Mark as In Work keeps the selection (usually more work on
+  the same tasks follows); To Accept clears it. Both offer Undo in a toast.
+- **Packs** (`pack-data.js`): consecutive rows with the same `Old ID` + `Date`
+  (parent from the name when `Old ID` is empty) form a pack, e.g. one creative
+  localised into several languages. A pack gets a header row
+  (`renderPackHeader`: concept, parent, languages, day, size, "ready k/N");
+  clicking it selects the whole pack, the arrow folds it (session only).
+- **Table details**: a Preview thumbnail column; Format is not a column but
+  shows as the placeholder icon; with several rows selected each shows a check
+  instead of its number.
+- **Board view** (`renderBoard`, toggle `#view-toggle`): columns Rework / Ready
+  for Design / In work / To accept regardless of the status chips; cards show
+  preview, priority, deadline, Type. Dragging cards to a column calls
+  `moveToStatus` (writes Status, toast with Undo via `restoreStatuses`).
+  At most 150 cards per column.
+- **Command palette** (⌘K / Ctrl+K, `PALETTE_COMMANDS`): actions (mostly
+  clicking the app's own buttons) plus task search across loaded tables.
+- **Toasts** (`toast`, `toastError`, `#toast-stack`): replace `alert()`
+  everywhere. Info fades, errors stay until closed; optional action button.
+- **Icons** (`icons.js`): one 16×16, 1.5 px stroke line set. Static buttons
+  get theirs from `data-icon="name"` (`applyIcons` at startup); JS-built
+  buttons use `iconSvg(name)`. A button that flashes "copied" must go through
+  `flashCopied`, which restores its markup, never `textContent`.
+- **Copying**: ⌘C / Ctrl+C copies the selected names, ⌘⇧C names + briefs
+  (`copySelectedTasks`, `formatNameAndBriefs` in markdown-data.js); uses
+  `e.code` so non-Latin layouts work; normal copy wins in inputs, with text
+  selected, or with a modal open.
+- **Links**: every link click opens in the system browser. The renderer
+  handles its own links; main.js also has `setWindowOpenHandler` and a
+  `will-navigate` guard, because a plain `<a href>` once replaced the app
+  window with the web page.
 - **Task details modal** (double-click a row): every field is editable and
   saved immediately, and the ⚙ button hides fields. Pinned fields: Hours,
   Date Done, Timing; Preview, Creative Link, Figma/Canvas link. Task
@@ -284,12 +332,18 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   - Reference: TLN_3536 9x16 (18 s, 32.7 MB) → 30.3 MB in ~6 s, SSIM 0.997.
 - **Dashboard** (`computeDashboardStats`, `dashboard-data.js`): Done and To
   accept tasks per designer by type, hours per designer, period presets.
+- **Workload** (header tab, `renderWorkload`, `workload-data.js`): for the
+  manager, open tasks (Ready for Design + In work) and High ones per designer;
+  filter by table and by product (`Project`).
 - **Canvas** (`canvas.js`, `canvas-data.js`): lineage chains via Old ID /
   New ID, with pan and zoom.
 - **Notifications** (`notifications-data.js`): when polling finds a new task
   for the selected designer, it notifies, rings the in-app bell (with sound
   and a mute toggle), and runs a cold-start catch-up for tasks assigned while
-  the app was closed. Urgency badges come from the deadline.
+  the app was closed. Urgency badges come from the deadline. **Deadline
+  alerts**: the selected designer's unfinished tasks due in 1–2 days raise a
+  second sound, an OS banner and an accented bell entry, once per task per
+  deadline (`findDeadlineAlerts`, keys in `higgtable_deadline_alerts_v1`).
 - **Drive links**: the only remaining Drive feature. Before a
   `drive.google.com/drive/...` link opens, `rewriteDriveLink` inserts
   `/u/<driveAccountIndex>/` (set in Settings, e.g. `2`) so it opens in the
@@ -297,6 +351,10 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
 - **Auto-update**: on Windows, electron-updater installs silently. On macOS
   (the app is unsigned) it checks GitHub's latest release and offers the
   .dmg. A mac user must run `xattr -cr /Applications/HiggTable.app` once.
+- **Windows build is x64** (`build.win.target` arch `["x64"]`). On the
+  owner's Apple Silicon Mac electron-builder otherwise defaulted to arm64:
+  the installer then left only the uninstaller on x64 PCs and shipped no
+  ffmpeg (fixed in 1.8.1).
 
 ## History and decisions (don't relitigate without the owner)
 
@@ -320,14 +378,23 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
 
 ## Known loose ends
 
-- **Preview may be wiped locally after an upload**: Airtable's
-  `uploadAttachment` response keys `fields` by **field ID**, but
-  `performRename` and `confirmAutofill` do
-  `rec.fields['Preview'] = result.fields['Preview']` (undefined). The log
-  shows `upload-attachment: success, Preview now has 0 attachment(s)`. The
-  data in Airtable is fine; the local copy is blank until the next refresh.
-  Fix: take the first value of `result.fields`, or re-read the record.
 - Dead code left over from the Drive removal: `findDirByExactName` in
   `main.js` (unused) and a run of blank lines around the clipboard IPC. Some
   comments still mention the deleted `drive-path.js`.
 - `README.md` is the user-facing install guide, and its feature list is brief.
+
+## Release notes and screenshots
+
+- Each release gets `release-assets/<version>/` (untracked): numbered
+  screenshots plus `slack-message.md`, the Ukrainian notes in Slack markup
+  that reference them ("скрін 1, 2").
+- Screenshots are 2880×1720 (1440×860 at 2×) of a **demo harness**, never of
+  real Airtable data (the repo is public): copy `renderer/` to the
+  scratchpad, add a `stub.js` before `notifications-data.js` that sets
+  `window.app` / `window.airtable` to no-op proxies (`indexTaskFiles` returns
+  fake `[name, bytes, path]` entries), and a `seed.js` after `canvas.js` that
+  fills `state.tables`, `state.records`, `recordsCache` with invented tasks
+  in the real naming pattern (previews as `data:` SVG, which the CSP allows).
+  Serve it with `python3 -m http.server` and capture with a small Electron
+  script (`force-device-scale-factor 2`, `capturePage()`), one scripted
+  scene per shot.
