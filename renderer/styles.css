@@ -742,3 +742,5 @@ table.dash-table td small { color: var(--text-muted); font-size: 10px; }
 #autofill-links-pairs .link-pair-url-btn { flex: 0 1 auto; }
 #drive-connect-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); font-size: 11px; color: var(--text-muted); }
 #drive-connect-status.ok { color: var(--accent); } #drive-connect-status.bad { color: #e0a43a; }
+#drive-rclone-row input { width: 100%; box-sizing: border-box; background: var(--bg-app); border: 1px solid var(--border-strong); color: var(--text-primary); padding: var(--space-3); border-radius: var(--radius-sm); font-size: 12px; font-family: monospace; }
+#settings-modal a[data-external] { color: var(--accent); }
