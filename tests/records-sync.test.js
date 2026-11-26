@@ -47,3 +47,32 @@ describe('usableCache', () => {
     expect(usableCache(null, 'tbl1')).toBe(false);
   });
 });
+
+describe('expiring Preview links', () => {
+  const { attachmentUrlExpiry, previewNeedsRefresh, recordIdsFormula } = require('../renderer/records-sync');
+  const url = exp => `https://v5.airtableusercontent.com/v3/u/47/47/${exp}/AbC_d-1/XyZ`;
+  const rec = (u, thumbs = true) => ({ id: 'r', fields: { Preview: [{ url: u, thumbnails: thumbs ? { small: { url: u } } : undefined }] } });
+
+  test('reads the expiry out of a signed link', () => {
+    expect(attachmentUrlExpiry(url(1795708800000))).toBe(1795708800000);
+    expect(attachmentUrlExpiry('data:image/svg+xml;utf8,x')).toBeNull();
+    expect(attachmentUrlExpiry(undefined)).toBeNull();
+  });
+
+  test('refresh when expired or within ten minutes; not when far off, unknown or absent', () => {
+    const now = 1795700000000;
+    expect(previewNeedsRefresh(rec(url(now - 1)), now)).toBe(true);
+    expect(previewNeedsRefresh(rec(url(now + 5 * 60000)), now)).toBe(true);
+    expect(previewNeedsRefresh(rec(url(now + 60 * 60000)), now)).toBe(false);
+    expect(previewNeedsRefresh(rec(url(now - 1), false), now)).toBe(true);
+    expect(previewNeedsRefresh(rec('https://example.com/a.png'), now)).toBe(false);
+    expect(previewNeedsRefresh({ fields: {} }, now)).toBe(false);
+  });
+
+  test('recordIdsFormula keeps only record ids', () => {
+    expect(recordIdsFormula(['recAAAAAAAAAAAAAA', "rec') , TRUE()", 'recBBBBBBBBBBBBBB']))
+      .toBe("OR(RECORD_ID()='recAAAAAAAAAAAAAA',RECORD_ID()='recBBBBBBBBBBBBBB')");
+    expect(recordIdsFormula(['nope'])).toBeNull();
+    expect(recordIdsFormula()).toBeNull();
+  });
+});

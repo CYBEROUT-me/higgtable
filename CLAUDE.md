@@ -89,8 +89,9 @@ renderer/
 tests/         Jest tests, one per pure module plus airtable.test.js.
 docs/superpowers/specs, plans   Historical design docs and plans (several describe
                the removed Drive automation; treat them as history, not current design).
-scripts/fetch-ffmpeg.js  Downloads ffmpeg/ffprobe into vendor/<os>-<arch>/ (git-ignored);
-               runs automatically before every build/release script.
+scripts/fetch-ffmpeg.js, fetch-rclone.js  Download ffmpeg/ffprobe and rclone into
+               vendor/<os>-<arch>/ (git-ignored); `npm run fetch-binaries` runs
+               both automatically before every build/release script.
 build/         App icons.  dist/  Build output (git-ignored).
 ```
 
@@ -110,7 +111,9 @@ are globals there. Jest `require`s the same file. Add the `<script>` tag in
 `index.html` (current order: notifications-data, dashboard-data, markdown-data,
 drive-links, ratio-fix, task-refs, task-search, link-paste, autofill-data,
 workload-data, resize-plan, readiness-data, records-sync, icons, pack-data, app,
-canvas-data, canvas) and add `tests/<name>.test.js`.
+canvas-data, canvas; performance-data right after dashboard-data, drive-index
+right after drive-links) and add
+`tests/<name>.test.js`.
 
 ### Process boundary
 
@@ -128,7 +131,8 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
 
 - `settings.json` in Electron `userData` (macOS:
   `~/Library/Application Support/HiggTable/`): `apiKey` (Airtable PAT),
-  `workingDirectory`, `driveAccountIndex`, `autoFixRatio`, `resizeCustomSizes`
+  `workingDirectory`, `driveAccountIndex`, `driveRootFolderId`, `rcloneRemote`,
+  `driveCodeApps`, `driveFolderIds`, `autoFixRatio`, `resizeCustomSizes`
   (last 5 custom resize sizes, e.g. `"1200x628"`). Saved via the
   `save-settings` IPC, which **merges** with the existing contents.
 - `higgtable.log` sits in the same folder. Both main (`log()`) and the
@@ -217,11 +221,24 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   rejected both a shrunken bar and empty space. The Mark buttons do **not**
   touch Date Done. Mark as In Work keeps the selection (usually more work on
   the same tasks follows); To Accept clears it. Both offer Undo in a toast.
+- **Repeat renders**: After Effects writes `<base>_9x16_1.mp4` when the master
+  exists. `index-task-files` indexes those (with mtime); `readiness-data.js`
+  (`findRepeatRenders`) flags a newer one in the Ready column, the panel, the
+  step-bar count, Resize/Compress and Autofill. "Use _9x16_1 as master"
+  (`promote-repeat-render` IPC) renames it over the master: no backup, by the
+  owner's choice. It warns, never blocks.
 - **Packs** (`pack-data.js`): consecutive rows with the same `Old ID` + `Date`
   (parent from the name when `Old ID` is empty) form a pack, e.g. one creative
   localised into several languages. A pack gets a header row
   (`renderPackHeader`: concept, parent, languages, day, size, "ready k/N");
   clicking it selects the whole pack, the arrow folds it (session only).
+- **Preview links expire**: Airtable signs attachment links for 2–4 hours
+  (`.../v3/u/N/N/<expiry ms>/...`), but records stay in the disk cache and
+  through incremental syncs much longer. `previewElement` never shows a broken
+  image: an expired link (`previewNeedsRefresh`, records-sync.js) or a failed
+  load shows the placeholder and queues the record for `get-records-by-id`
+  (50 ids per request, each record at most every 5 min). ⌘K "Reload previews"
+  forces it for the visible rows. Fresh links are not written to the disk cache.
 - **Table details**: a Preview thumbnail column; Format is not a column but
   shows as the placeholder icon; with several rows selected each shows a check
   instead of its number.
@@ -229,9 +246,15 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   for Design / In work / To accept regardless of the status chips; cards show
   preview, priority, deadline, Type. Dragging cards to a column calls
   `moveToStatus` (writes Status, toast with Undo via `restoreStatuses`).
-  At most 150 cards per column.
-- **Command palette** (⌘K / Ctrl+K, `PALETTE_COMMANDS`): actions (mostly
-  clicking the app's own buttons) plus task search across loaded tables.
+  At most 150 cards per column. Within a column, tasks of one pack
+  (`groupIntoPacks`, not only consecutive ones) sit under a compact pack header:
+  click selects the pack, dragging it moves the whole pack, the arrow folds it.
+- **Command palette** (⌘K / Ctrl+K, `PALETTE_COMMANDS` +
+  `dynamicPaletteCommands`): actions (mostly clicking the app's own buttons),
+  Set status: X on the selection (Undo), Filter status: X, Designer: X,
+  Dashboard: <period>, Workload: <table>, plus task search across loaded tables.
+  On a task hit ⌘↵ opens its Creative Link / Figma, ⇧↵ copies the name, ⌥↵
+  name + brief.
 - **Toasts** (`toast`, `toastError`, `#toast-stack`): replace `alert()`
   everywhere. Info fades, errors stay until closed; optional action button.
 - **Icons** (`icons.js`): one 16×16, 1.5 px stroke line set. Static buttons
@@ -330,8 +353,19 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
     re-render). The swap is a single rename over the original, never a
     delete-then-rename, so a crash cannot lose the file.
   - Reference: TLN_3536 9x16 (18 s, 32.7 MB) → 30.3 MB in ~6 s, SSIM 0.997.
-- **Dashboard** (`computeDashboardStats`, `dashboard-data.js`): Done and To
-  accept tasks per designer by type, hours per designer, period presets.
+- **Dashboard** (`computeDashboardStats`, `dashboard-data.js`,
+  `performance-data.js`): period presets (week … quarter, previous quarter) and
+  two views (`#dashboard-view-toggle`, `higgtable_dash_view`). **Compact** (the
+  default, as before): Done + To accept per designer by Type, then hours per
+  designer. **Detailed**: the same first table (the owner wants it first),
+  headline tiles, a load chart (tasks and hours per day / week / month, two
+  single-series SVG bar charts with the value inside each bar, never one chart
+  with two scales) with a designer picker, the last six full months per
+  designer (last 3 vs the 3 before, fitted trend, ±5 %/month = steady),
+  designers in the period with Rework now, hours per task by Type. A
+  period-vs-previous-period comparison was tried and dropped: week against
+  week said little. The step bar, Table/Board switch and Columns button are
+  hidden in Dashboard, Workload and Canvas.
 - **Workload** (header tab, `renderWorkload`, `workload-data.js`): for the
   manager, open tasks (Ready for Design + In work) and High ones per designer;
   filter by table and by product (`Project`).
@@ -344,7 +378,32 @@ canvas-data, canvas) and add `tests/<name>.test.js`.
   alerts**: the selected designer's unfinished tasks due in 1–2 days raise a
   second sound, an OS banner and an accented bell entry, once per task per
   deadline (`findDeadlineAlerts`, keys in `higgtable_deadline_alerts_v1`).
-- **Drive links**: the only remaining Drive feature. Before a
+- **Google Drive through rclone** (read only; `drive-rclone.js` in main,
+  `renderer/drive-index.js` pure, IPC `drive-find-task-folders` /
+  `drive-check`). Layout: `<root>/<App>_creatives/<YYYY>/<MM_Month>/<task
+  name>/`. A task's Creative Link is its own folder's link, built from the
+  folder ID (`drive.google.com/drive/folders/<ID>`); never `rclone link`, which
+  changes sharing. Autofill looks the folders up when it opens (this month,
+  last month, months of Date Done) and pairs them by name (Cyrillic look-alike
+  letters folded); two folders with one name or an existing link arrive
+  unticked; pasted links still take over. "Open GD Folder" opens the task's
+  folder (one task) or the month folder. Which `<App>_creatives` holds a
+  prefix (LO, LiV, TLN…) is learned from each app's latest non-empty month
+  (a prefix whose own folder is empty is then looked for in every app's
+  months) and saved as `driveCodeApps`; folder ids are cached in `driveFolderIds`. Settings:
+  `driveRootFolderId`, `rcloneRemote` (default `gdrive`), optional
+  `rclonePath` (overrides the bundled one). rclone v1.76.0 ships in the app
+  like ffmpeg (`scripts/fetch-rclone.js`, checked against rclone's
+  SHA256SUMS, into vendor/ → resources/bin; ~33 MB per installer). Settings →
+  "Connect Google Drive" runs `rclone config create <remote> drive
+  scope=drive.readonly`: rclone opens Google's sign-in in the user's browser
+  and keeps the token in its own config (`~/.config/rclone/rclone.conf`,
+  shared with a system rclone); the app never sees credentials. rclone's shared Google
+  client is throttled (first lookup ~60 s, then ~2 s per month folder) and is
+  being retired during 2026: an own client_id is the fix. Upload is not built
+  (needs write scope). The old `driveAppFolders` / `driveAppMirrors` keys in
+  settings.json are no longer used.
+- **Drive links**: the other Drive feature. Before a
   `drive.google.com/drive/...` link opens, `rewriteDriveLink` inserts
   `/u/<driveAccountIndex>/` (set in Settings, e.g. `2`) so it opens in the
   right Google account. The owner explicitly asked to keep this.

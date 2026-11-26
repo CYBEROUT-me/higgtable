@@ -46,3 +46,18 @@ test('packSummary reads parent, concept, languages and day', () => {
 test('packSummary copes with half-filled names', () => {
   expect(packSummary([rec({ Name: 'OL_15754_15750____EN_usr__PAN___9x16', Date: 'd' })]).concept).toBe('');
 });
+
+test('groupIntoPacks joins same-pack tasks that are not next to each other', () => {
+  const { groupIntoPacks } = require('../renderer/pack-data');
+  const a1 = rec({ 'Old ID': 1, Date: 'd1' });
+  const b1 = rec({ 'Old ID': 2, Date: 'd1' });
+  const a2 = rec({ 'Old ID': 1, Date: 'd1' });
+  const n1 = rec({ Name: 'no parent' });
+  const n2 = rec({ Name: 'no parent' });
+  const a3 = rec({ 'Old ID': 1, Date: 'd2' });
+  const groups = groupIntoPacks([a1, b1, a2, n1, n2, a3]);
+  expect(groups.map(g => g.records)).toEqual([[a1, a2], [b1], [n1], [n2], [a3]]);
+  expect(groups[0].key).toBe('1|d1');
+  expect(groups[2].key).toBeNull();
+  expect(groupIntoPacks([])).toEqual([]);
+});

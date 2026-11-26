@@ -9,13 +9,58 @@ const READY_VIDEO_SIZES = ['9x16', '1x1', '4x5', '16x9'];
 const READY_LIMIT_BYTES = 32000000; // same as resize-plan.js MAX_DELIVERY_BYTES
 const HANDED_IN_STATUSES = ['To accept', 'Done'];
 
-// `entries` is what `index-task-files` returns: [[lowercased name, bytes, path]].
+// How far repeat renders are looked for: "_9x16_1.mp4" … "_9x16_9.mp4".
+const MAX_REPEAT_INDEX = 9;
+
+// `entries` is what `index-task-files` returns:
+// [[lowercased name, bytes, path, mtimeMs]] (mtime may be missing).
 function buildFileIndex(entries) {
   const index = new Map();
-  (entries || []).forEach(([name, bytes, path]) => {
-    if (!index.has(name)) index.set(name, { bytes, path });
+  (entries || []).forEach(([name, bytes, path, mtime]) => {
+    if (!index.has(name)) index.set(name, { bytes, path, mtime: mtime == null ? null : mtime });
   });
   return index;
+}
+
+// After Effects does not overwrite: rendering again to "<base>_9x16.mp4" when it
+// exists writes "<base>_9x16_1.mp4" (then _2, …). Those repeats, each marked
+// newer when it is newer than the master (or the master is missing, or a time
+// is unknown): then the fresh render is in the repeat and the master is stale.
+function findRepeatRenders(base, index, label = '9x16') {
+  const lower = base.toLowerCase();
+  const master = index.get(`${lower}_${label}.mp4`) || null;
+  const out = [];
+  for (let n = 1; n <= MAX_REPEAT_INDEX; n++) {
+    const name = `${lower}_${label}_${n}.mp4`;
+    const hit = index.get(name);
+    if (!hit) continue;
+    const newer = !master || hit.mtime == null || master.mtime == null || hit.mtime > master.mtime;
+    out.push({ n, name, bytes: hit.bytes, path: hit.path, mtime: hit.mtime, newer });
+  }
+  return out;
+}
+
+// The repeat that should become the master: the newest of the newer ones.
+function repeatToPromote(repeats) {
+  const newer = (repeats || []).filter(r => r.newer);
+  if (!newer.length) return null;
+  return newer.reduce((best, r) => ((r.mtime || 0) > (best.mtime || 0) || (r.mtime === best.mtime && r.n > best.n) ? r : best));
+}
+
+// The master's file name for a repeat render's file name, or null when it is
+// not one: "X_9x16_1.mp4" -> "X_9x16.mp4".
+function masterNameForRepeat(filename) {
+  const m = /^(.+_\d+(?:\.\d+)?x\d+)_\d+(\.mp4)$/i.exec(String(filename));
+  return m ? m[1] + m[2] : null;
+}
+
+// Short warning text for a task's repeat renders, or null.
+function repeatWarning(repeats) {
+  if (!repeats || !repeats.length) return null;
+  const promote = repeatToPromote(repeats);
+  const suffix = r => `_9x16_${r.n}`;
+  if (promote) return `newer render in ${suffix(promote)}`;
+  return `old ${repeats.map(suffix).join(', ')} next to the master`;
 }
 
 function isStatTask(rec) {
@@ -31,7 +76,7 @@ function taskFiles(base, index) {
     return { label, bytes: hit ? hit.bytes : null, path: hit ? hit.path : null };
   });
   const preview = ['png', 'jpg', 'jpeg'].map(ext => index.get(`${lower}_1x1.${ext}`)).find(Boolean) || null;
-  return { videos, preview };
+  return { videos, preview, repeats: findRepeatRenders(base, index) };
 }
 
 function hasValue(v) {
@@ -60,7 +105,11 @@ function taskReadiness(rec, files, fieldNames) {
   items.push({ key: 'preview', label: 'Preview', done: hasValue(f['Preview']), step: 'autofill' });
   items.push({ key: 'hours', label: 'Hours', done: hasValue(f['Hours']), step: 'autofill' });
   const missing = items.filter(i => !i.done);
-  return { handedIn, items, missing, ready: handedIn || !missing.length };
+  // A repeat render does not block "ready" (the owner may know it is stale), but
+  // it is shown wherever readiness is, since the master may be the old render.
+  const warning = !isStatTask(rec) && !handedIn ? repeatWarning(files.repeats) : null;
+  const promote = warning ? repeatToPromote(files.repeats) : null;
+  return { handedIn, items, missing, ready: handedIn || !missing.length, warning, promote };
 }
 
 // Short text for the Ready column.
@@ -87,6 +136,7 @@ function stepSummary(list) {
     autofill: need('autofill'),
     autofillFields: Object.keys(fieldsMissing),
     accept: open.length,
+    warnings: open.filter(r => r.promote).length,
   };
   summary.next = summary.resize ? 'resize' : summary.compress ? 'compress' : summary.autofill ? 'autofill'
     : summary.accept ? 'accept' : null;
@@ -96,6 +146,6 @@ function stepSummary(list) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     READY_VIDEO_SIZES, READY_LIMIT_BYTES, buildFileIndex, isStatTask, taskFiles, taskReadiness,
-    readinessLabel, stepSummary,
+    readinessLabel, stepSummary, findRepeatRenders, repeatToPromote, masterNameForRepeat, repeatWarning,
   };
 }

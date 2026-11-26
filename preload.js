@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('airtable', {
   getTables: (baseId) => ipcRenderer.invoke('get-tables', baseId),
   getRecords: (baseId, tableId, requestId, modifiedAfter) =>
     ipcRenderer.invoke('get-records', baseId, tableId, requestId, modifiedAfter),
+  getRecordsById: (baseId, tableId, ids) => ipcRenderer.invoke('get-records-by-id', baseId, tableId, ids),
   onRecordsProgress: (callback) => {
     const listener = (_e, payload) => callback(payload);
     ipcRenderer.on('records-progress', listener);
@@ -40,6 +41,11 @@ contextBridge.exposeInMainWorld('app', {
   openTaskFolder:    (dir, name, base) => ipcRenderer.invoke('open-task-folder', dir, name, base),
   revealFile:        (p)           => ipcRenderer.invoke('reveal-file', p),
   indexTaskFiles:    (dir)         => ipcRenderer.invoke('index-task-files', dir),
+  promoteRepeatRender: (p)         => ipcRenderer.invoke('promote-repeat-render', p),
+  driveFindTaskFolders: (names, months) => ipcRenderer.invoke('drive-find-task-folders', names, months),
+  driveCheck:        ()            => ipcRenderer.invoke('drive-check'),
+  driveStatus:       ()            => ipcRenderer.invoke('drive-status'),
+  driveConnect:      ()            => ipcRenderer.invoke('drive-connect'),
   resizeInspect:     (tasks, keys) => ipcRenderer.invoke('resize-inspect', tasks, keys),
   resizeRender:      (job)         => ipcRenderer.invoke('resize-render', job),
   resizeCancel:      ()            => ipcRenderer.invoke('resize-cancel'),

@@ -55,6 +55,23 @@ function packSummary(records) {
   };
 }
 
+// Packs for a list whose members need not be next to each other (a board
+// column, sorted by priority and deadline): every task with the same key joins
+// the group of the first one, in order of first appearance. Tasks with no key
+// are groups of one. Returns [{ key, records }].
+function groupIntoPacks(records) {
+  const groups = [];
+  const byKey = new Map();
+  records.forEach(rec => {
+    const key = packKey(rec);
+    if (key !== null && byKey.has(key)) { byKey.get(key).records.push(rec); return; }
+    const group = { key, records: [rec] };
+    if (key !== null) byKey.set(key, group);
+    groups.push(group);
+  });
+  return groups;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { packKey, packLayout, packSummary };
+  module.exports = { packKey, packLayout, packSummary, groupIntoPacks };
 }

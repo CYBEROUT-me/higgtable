@@ -55,7 +55,9 @@ const state = {
   pendingFiles: [],
   sortCol: null,
   sortDir: 'asc',
-  dashboardPreset: 'week', // 'week' | 'lastWeek' | 'month' | 'prevMonth' | 'all' | 'custom'
+  dashboardView: (() => { try { return localStorage.getItem('higgtable_dash_view') === 'detailed' ? 'detailed' : 'compact'; } catch { return 'compact'; } })(),
+  dashboardPreset: 'week', // 'week' | 'lastWeek' | 'month' | 'prevMonth' | 'quarter' | 'prevQuarter' | 'all' | 'custom'
+  dashboardDes: '', // the load chart's designer ('' = everyone)
   dashboardCustomFrom: '',
   dashboardCustomTo: '',
   workloadTable: '',   // '' = all tables
@@ -174,43 +176,9 @@ function newestFirst(records) {
 function pad2(n) { return String(n).padStart(2, '0'); }
 function toISO(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 
-function startOfWeek(d) {
-  const day = d.getDay(); // 0=Sun..6=Sat
-  const diff = (day === 0 ? -6 : 1) - day; // shift to Monday
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + diff);
-  return monday;
-}
-
 function getDashboardRange() {
-  const today = new Date();
-  switch (state.dashboardPreset) {
-    case 'week': {
-      const from = startOfWeek(today);
-      const to = new Date(from); to.setDate(from.getDate() + 6);
-      return { from: toISO(from), to: toISO(to) };
-    }
-    case 'lastWeek': {
-      const from = startOfWeek(today); from.setDate(from.getDate() - 7);
-      const to = new Date(from); to.setDate(from.getDate() + 6);
-      return { from: toISO(from), to: toISO(to) };
-    }
-    case 'month': {
-      const from = new Date(today.getFullYear(), today.getMonth(), 1);
-      const to = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      return { from: toISO(from), to: toISO(to) };
-    }
-    case 'prevMonth': {
-      const from = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const to = new Date(today.getFullYear(), today.getMonth(), 0);
-      return { from: toISO(from), to: toISO(to) };
-    }
-    case 'custom':
-      return { from: state.dashboardCustomFrom || null, to: state.dashboardCustomTo || null };
-    case 'all':
-    default:
-      return { from: null, to: null };
-  }
+  return dashboardRange(state.dashboardPreset, toISO(new Date()),
+    { from: state.dashboardCustomFrom, to: state.dashboardCustomTo });
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────
@@ -222,6 +190,8 @@ async function boot() {
   refreshTaskFileIndex(true);
   state.autoFixRatio = settings.autoFixRatio === true;
   state.driveAccountIndex = settings.driveAccountIndex || '';
+  state.driveRootFolderId = settings.driveRootFolderId || '';
+  state.rcloneRemote = settings.rcloneRemote || '';
   const hasKey = await window.app.hasApiKey();
   if (!hasKey) {
     log('boot: no API key, showing settings modal');
@@ -961,16 +931,13 @@ function render() {
     }
     const tdThumb = tr.insertCell();
     tdThumb.className = 'thumb-cell';
-    const thumbUrl = previewUrl(rec, 'small');
-    if (thumbUrl) {
-      const img = document.createElement('img');
-      img.loading = 'lazy';
-      img.alt = '';
-      img.src = thumbUrl;
-      tdThumb.append(img);
-    } else {
-      tdThumb.innerHTML = `<span class="thumb-ph">${iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image')}</span>`;
-    }
+    tdThumb.append(previewElement(rec, 'small', pending => {
+      const ph = document.createElement('span');
+      ph.className = `thumb-ph${pending ? ' pending' : ''}`;
+      ph.innerHTML = iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image');
+      if (pending) ph.title = 'Preview link expired, loading a fresh one…';
+      return ph;
+    }));
     cols.forEach(col => {
       const td = tr.insertCell();
       const val = rec.fields[col];
@@ -994,9 +961,9 @@ function render() {
       const td = tr.insertCell();
       const r = readinessFor(rec, readyFieldNames);
       if (r) {
-        td.textContent = readinessLabel(r);
-        td.className = `ready-cell ${r.handedIn ? 'muted' : r.ready ? 'ok' : 'warn'}`;
-        td.title = r.handedIn ? '' : r.missing.map(i => i.label).join('\n');
+        td.textContent = r.promote ? `⚠ ${r.warning}` : readinessLabel(r);
+        td.className = `ready-cell ${r.handedIn ? 'muted' : r.ready && !r.promote ? 'ok' : 'warn'}`;
+        td.title = r.handedIn ? '' : [r.warning, ...r.missing.map(i => i.label)].filter(Boolean).join('\n');
       }
     }
   });
@@ -1029,7 +996,9 @@ function renderBoard() {
     .sort(compareForList);
   const byStatus = new Map(statuses.map(s => [s, []]));
   recs.forEach(r => byStatus.get(r.fields['Status']).push(r));
-  const ordered = statuses.flatMap(s => byStatus.get(s));
+  // Tasks of one pack sit together under a pack header, in each column.
+  const groupsByStatus = new Map(statuses.map(s => [s, groupIntoPacks(byStatus.get(s))]));
+  const ordered = statuses.flatMap(s => groupsByStatus.get(s).flatMap(g => g.records));
   const today = toISO(new Date());
 
   const board = document.createElement('div');
@@ -1051,11 +1020,20 @@ function renderBoard() {
     head.append(title, count);
     const cards = document.createElement('div');
     cards.className = 'board-cards';
-    list.slice(0, BOARD_CARD_LIMIT).forEach(rec => cards.append(boardCard(rec, ordered, today)));
-    if (list.length > BOARD_CARD_LIMIT) {
+    let shown = 0;
+    for (const group of groupsByStatus.get(status)) {
+      if (shown >= BOARD_CARD_LIMIT) break;
+      if (group.records.length > 1) {
+        cards.append(boardPack(group.records, ordered, today));
+      } else {
+        cards.append(boardCard(group.records[0], ordered, today));
+      }
+      shown += group.records.length;
+    }
+    if (list.length > shown) {
       const more = document.createElement('div');
       more.className = 'board-more';
-      more.textContent = `+${list.length - BOARD_CARD_LIMIT} more — use the table to see them all`;
+      more.textContent = `+${list.length - shown} more — use the table to see them all`;
       cards.append(more);
     }
     col.append(head, cards);
@@ -1079,6 +1057,84 @@ function renderBoard() {
   renderTaskPanel();
 }
 
+// A pack in a board column: a compact header (fold, concept, parent, languages,
+// day, ready k/N) over its cards. Clicking the header selects the pack like the
+// table's pack header; dragging it moves the whole pack to another column.
+function boardPack(members, ordered, today) {
+  const key = packKey(members[0]);
+  const collapsed = collapsedPacks.has(key);
+  const ids = members.map(r => r.id);
+  const allSelected = ids.every(id => state.selectedIds.has(id));
+  const wrap = document.createElement('div');
+  wrap.className = `board-pack${collapsed ? ' collapsed' : ''}${allSelected ? ' selected-pack' : ''}`;
+
+  const head = document.createElement('div');
+  head.className = 'board-pack-head';
+  head.draggable = true;
+  head.title = 'Click to select the pack · drag to move the whole pack';
+  const toggle = document.createElement('button');
+  toggle.className = 'pack-toggle';
+  toggle.title = collapsed ? 'Show the tasks in this pack' : 'Fold this pack';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.innerHTML = iconSvg('down');
+  toggle.onclick = e => {
+    e.stopPropagation();
+    collapsed ? collapsedPacks.delete(key) : collapsedPacks.add(key);
+    render();
+  };
+  const sum = packSummary(members);
+  const label = document.createElement('span');
+  label.className = 'board-pack-label';
+  const strong = document.createElement('strong');
+  strong.textContent = sum.concept || 'Pack';
+  const meta = document.createElement('span');
+  meta.className = 'pack-meta';
+  meta.textContent = [
+    sum.parent && `from ${sum.parent}`,
+    sum.languages.length && sum.languages.join(' '),
+    sum.date && `${sum.date.slice(8, 10)}.${sum.date.slice(5, 7)}`,
+  ].filter(Boolean).join(' · ');
+  label.append(strong, meta);
+  label.title = `${sum.concept || 'Pack'} · ${meta.textContent} · ${members.length} tasks`;
+  const count = document.createElement('span');
+  count.className = 'board-pack-count';
+  if (taskFileIndex) {
+    const ready = members.filter(r => readinessFor(r)?.ready).length;
+    count.textContent = `${ready}/${members.length} ready`;
+    count.classList.toggle('ok', ready === members.length);
+  } else {
+    count.textContent = `${members.length} tasks`;
+  }
+  head.append(toggle, label, count);
+  head.onclick = e => selectPack(members, e);
+  head.addEventListener('dragstart', e => {
+    e.dataTransfer.setData('text/plain', JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+    wrap.classList.add('dragging');
+  });
+  head.addEventListener('dragend', () => wrap.classList.remove('dragging'));
+  wrap.append(head);
+
+  if (!collapsed) {
+    const body = document.createElement('div');
+    body.className = 'board-pack-cards';
+    members.forEach(rec => body.append(boardCard(rec, ordered, today)));
+    wrap.append(body);
+  }
+  return wrap;
+}
+
+// Selects every task of a pack (Cmd/Ctrl adds it to the selection).
+function selectPack(members, e) {
+  const ids = members.map(r => r.id);
+  if (!(e.metaKey || e.ctrlKey)) state.selectedIds.clear();
+  ids.forEach(id => state.selectedIds.add(id));
+  state.selectionAnchorId = ids[0];
+  state.selectionCursorId = ids[ids.length - 1];
+  state.selectedTask = members[0];
+  render();
+}
+
 function boardCard(rec, ordered, today) {
   const card = document.createElement('article');
   card.className = 'board-card';
@@ -1088,16 +1144,12 @@ function boardCard(rec, ordered, today) {
 
   const thumb = document.createElement('div');
   thumb.className = 'board-thumb';
-  const url = previewUrl(rec, 'large');
-  if (url) {
-    const img = document.createElement('img');
-    img.loading = 'lazy';
-    img.alt = '';
-    img.src = url;
-    thumb.append(img);
-  } else {
-    thumb.innerHTML = iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image');
-  }
+  thumb.append(previewElement(rec, 'large', pending => {
+    const ph = document.createElement('span');
+    ph.className = `thumb-ph${pending ? ' pending' : ''}`;
+    ph.innerHTML = iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image');
+    return ph;
+  }));
   const body = document.createElement('div');
   body.className = 'board-card-body';
   const name = document.createElement('div');
@@ -1181,6 +1233,79 @@ function previewUrl(rec, size) {
   return att.thumbnails?.[size]?.url || att.url || null;
 }
 
+// ── Preview links ──────────────────────────────────────────────────────────
+// Airtable signs attachment links for 2-4 hours only, while records live in
+// the disk cache and through incremental syncs much longer. So a Preview is
+// never shown as a broken image: an expired link shows the placeholder and the
+// record is fetched again in the background (batched, 50 per request), and a
+// link that fails to load anyway does the same. Each record is retried at most
+// every 5 minutes, so a really missing image cannot loop.
+
+const PREVIEW_RETRY_MS = 5 * 60 * 1000;
+const PREVIEW_BATCH = 50;
+const previewRefreshQueue = new Map(); // table -> Set of record ids
+const previewRefreshTried = new Map(); // record id -> when it was last asked for
+let previewRefreshTimer = null;
+
+// An <img> for the task's Preview, or the placeholder that `placeholder(pending)`
+// builds (pending = a fresh link is on its way).
+function previewElement(rec, size, placeholder, { lazy = true } = {}) {
+  const url = previewUrl(rec, size);
+  if (!url) return placeholder(false);
+  if (previewNeedsRefresh(rec, Date.now())) {
+    requestPreviewRefresh(rec);
+    return placeholder(true);
+  }
+  const img = document.createElement('img');
+  if (lazy) img.loading = 'lazy';
+  img.alt = '';
+  img.src = url;
+  img.addEventListener('error', () => {
+    img.replaceWith(placeholder(requestPreviewRefresh(rec)));
+  }, { once: true });
+  return img;
+}
+
+// Queues a record of the active table for a fresh copy. Returns whether it was
+// queued (false while it was tried recently).
+function requestPreviewRefresh(rec, { force = false } = {}) {
+  const table = state.activeTable;
+  if (!table || !state.tables[table] || !state.baseId) return false;
+  const last = previewRefreshTried.get(rec.id);
+  if (!force && last && Date.now() - last < PREVIEW_RETRY_MS) return false;
+  previewRefreshTried.set(rec.id, Date.now());
+  if (!previewRefreshQueue.has(table)) previewRefreshQueue.set(table, new Set());
+  previewRefreshQueue.get(table).add(rec.id);
+  clearTimeout(previewRefreshTimer);
+  previewRefreshTimer = setTimeout(flushPreviewRefresh, 300);
+  return true;
+}
+
+async function flushPreviewRefresh() {
+  const jobs = [...previewRefreshQueue.entries()];
+  previewRefreshQueue.clear();
+  let fresh = 0;
+  for (const [table, idSet] of jobs) {
+    const ids = [...idSet];
+    const list = recordsCache[table] || (table === state.activeTable ? state.records : null);
+    if (!list) continue;
+    for (let i = 0; i < ids.length; i += PREVIEW_BATCH) {
+      try {
+        const got = await window.airtable.getRecordsById(state.baseId, state.tables[table].id, ids.slice(i, i + PREVIEW_BATCH));
+        // Only records already in the list: a deleted one is not brought back here.
+        const known = new Set(list.map(r => r.id));
+        mergeChangedRecords(list, got.filter(r => known.has(r.id)));
+        fresh += got.length;
+      } catch (err) {
+        log(`flushPreviewRefresh: ${table} FAILED — ${err.message}`);
+      }
+    }
+  }
+  if (!fresh) return;
+  log(`flushPreviewRefresh: fresh Preview links for ${fresh} record(s)`);
+  render();
+}
+
 // Table or board, remembered on this computer.
 const VIEW_KEY = 'higgtable_view';
 state.view = (() => { try { return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'table'; } catch { return 'table'; } })();
@@ -1243,14 +1368,7 @@ function renderPackHeader(tbody, members, colCount) {
   hint.textContent = allSelected ? 'Selected' : 'Click to select the pack';
   td.append(hint);
 
-  tr.onclick = e => {
-    if (!(e.metaKey || e.ctrlKey)) state.selectedIds.clear();
-    ids.forEach(id => state.selectedIds.add(id));
-    state.selectionAnchorId = ids[0];
-    state.selectionCursorId = ids[ids.length - 1];
-    state.selectedTask = members[0];
-    render();
-  };
+  tr.onclick = e => selectPack(members, e);
 }
 
 // ── Bulk actions ─────────────────────────────────────────────────────────
@@ -1259,8 +1377,7 @@ function updateBulkActionsBar() {
   const bar = document.getElementById('bulk-actions-bar');
   const count = state.selectedIds.size;
   bar.classList.toggle('inactive', count === 0);
-  document.getElementById('bulk-actions-count').textContent = `${count} selected`;
-  renderStepButtons();
+  renderStepButtons(); // also writes the "N selected" count
 }
 
 // ── Readiness: files on disk + fields, for the step bar, Ready column, panel ──
@@ -1310,6 +1427,10 @@ function renderStepButtons() {
   const fieldNames = readinessFieldNames();
   const list = selected.map(r => readinessFor(r, fieldNames)).filter(Boolean);
   const sum = list.length ? stepSummary(list) : null;
+  const countEl = document.getElementById('bulk-actions-count');
+  countEl.textContent = `${state.selectedIds.size} selected${sum && sum.warnings ? ` · ⚠ ${sum.warnings}` : ''}`;
+  countEl.title = sum && sum.warnings
+    ? `${sum.warnings} task${sum.warnings === 1 ? ' has' : 's have'} a newer After Effects render (_9x16_1.mp4) next to the master. Open the task to use it as the master.` : '';
   const statusText = {
     resize: sum && (sum.resize ? `${sum.resize} need sizes` : 'sizes ✓'),
     compress: sum && (sum.compress ? `${sum.compress} over 32 MB` : 'under 32 MB ✓'),
@@ -1331,6 +1452,51 @@ function renderStepButtons() {
     btn.classList.toggle('next', !!sum && sum.next === step);
     btn.classList.toggle('primary', step === 'accept' && !!sum && sum.next === 'accept');
   });
+}
+
+// ── Repeat renders (_9x16_1) ───────────────────────────────────────────────
+// After Effects writes "<base>_9x16_1.mp4" when the master already exists, so a
+// fresh render can sit next to a stale master. readiness-data.js finds them;
+// here they are shown, and a newer one can replace the master (one rename).
+
+async function promoteRepeat(repeat) {
+  try {
+    await window.app.promoteRepeatRender(repeat.path);
+    log(`promoteRepeat: ${repeat.path} is now the master`);
+    toast(`_9x16_${repeat.n}.mp4 is now the 9x16 master (the old master was replaced)`);
+    await refreshTaskFileIndex(true);
+    return true;
+  } catch (err) {
+    log(`promoteRepeat: FAILED — ${err.message}`);
+    toastError(`Could not replace the master: ${err.message}`);
+    return false;
+  }
+}
+
+// A warning line for a readiness result with a repeat render, with a button to
+// make the newer render the master. `after` runs once the master is replaced.
+function repeatWarningEl(r, after) {
+  const row = document.createElement('div');
+  row.className = `repeat-warning${r.promote ? '' : ' mild'}`;
+  row.innerHTML = iconSvg('warning');
+  const text = document.createElement('span');
+  text.textContent = r.promote
+    ? `${r.warning}.mp4: the 9x16 master may be the old render`
+    : `${r.warning}`;
+  row.append(text);
+  if (r.promote) {
+    const btn = document.createElement('button');
+    btn.textContent = `Use _9x16_${r.promote.n} as master`;
+    btn.title = `Rename ${r.promote.name} over the 9x16 master, replacing it (no backup)`;
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      btn.disabled = true;
+      if (await promoteRepeat(r.promote) && after) await after();
+      btn.disabled = false;
+    });
+    row.append(btn);
+  }
+  return row;
 }
 
 // ── Side panel ───────────────────────────────────────────────────────────
@@ -1390,6 +1556,7 @@ function renderTaskPanel() {
     filesEl.append(line('Stat task', 'no videos needed'));
   }
   const r = readinessFor(rec);
+  if (r && r.warning) filesEl.prepend(repeatWarningEl(r));
   (r ? r.items.filter(i => i.step === 'autofill') : []).forEach(i => {
     fieldsEl.append(line(i.label, i.done ? 'set' : 'empty', i.done ? 'ok' : 'warn'));
   });
@@ -1402,18 +1569,21 @@ function renderTaskPanel() {
 function renderTaskPanelCard(rec) {
   const previewEl = document.getElementById('task-panel-preview');
   previewEl.replaceChildren();
-  const large = previewUrl(rec, 'large');
-  previewEl.classList.toggle('empty', !large);
-  if (large) {
-    const img = document.createElement('img');
-    img.src = large;
-    img.alt = 'Preview';
-    img.title = 'Open full size';
-    img.onclick = () => window.app.openExternal(previewUrl(rec, 'full') || large);
-    previewEl.append(img);
-  } else {
-    previewEl.innerHTML = `${iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image')}<span>No preview yet</span>`;
+  const placeholder = pending => {
+    previewEl.classList.add('empty');
+    const frag = document.createElement('span');
+    frag.className = `task-panel-preview-ph${pending ? ' pending' : ''}`;
+    frag.innerHTML = `${iconSvg(FORMAT_ICONS[rec.fields['Format']] || 'image')}<span>${pending ? 'Loading preview…' : 'No preview yet'}</span>`;
+    return frag;
+  };
+  previewEl.classList.remove('empty');
+  const el = previewElement(rec, 'large', placeholder, { lazy: false });
+  if (el.tagName === 'IMG') {
+    el.alt = 'Preview';
+    el.title = 'Open full size';
+    el.onclick = () => window.app.openExternal(previewUrl(rec, 'full') || previewUrl(rec, 'large'));
   }
+  previewEl.append(el);
 
   const meta = document.getElementById('task-panel-meta');
   meta.replaceChildren();
@@ -1493,9 +1663,9 @@ function renderTaskPanelSelection() {
     const status = document.createElement('span');
     const ready = readinessFor(r, fieldNames);
     if (ready) {
-      status.textContent = readinessLabel(ready);
-      status.className = ready.handedIn ? 'muted' : ready.ready ? 'ok' : 'warn';
-      status.title = ready.handedIn ? '' : ready.missing.map(i => i.label).join('\n');
+      status.textContent = ready.promote ? `⚠ ${ready.warning}` : readinessLabel(ready);
+      status.className = ready.handedIn ? 'muted' : ready.ready && !ready.promote ? 'ok' : 'warn';
+      status.title = ready.handedIn ? '' : [ready.warning, ...ready.missing.map(i => i.label)].filter(Boolean).join('\n');
     }
     row.append(name, status);
     row.addEventListener('click', () => selectSingleTask(r));
@@ -1676,6 +1846,9 @@ function showDashboard() {
   document.getElementById('des-control').classList.add('hidden');
   document.getElementById('refresh-btn').classList.add('hidden');
   document.getElementById('workload-container').classList.add('hidden');
+  document.getElementById('view-toggle').classList.add('hidden');
+  document.getElementById('columns-btn').classList.add('hidden');
+  document.getElementById('bulk-actions-bar').classList.add('hidden');
   document.getElementById('dashboard-container').classList.remove('hidden');
   setStatus('Dashboard: completed tasks by designer');
   syncDashboardControls();
@@ -1698,6 +1871,9 @@ function maybeRefreshDashboard() {
 function hideDashboard() {
   document.getElementById('dashboard-container').classList.add('hidden');
   document.getElementById('workload-container').classList.add('hidden');
+  document.getElementById('bulk-actions-bar').classList.remove('hidden');
+  document.getElementById('view-toggle').classList.remove('hidden');
+  document.getElementById('columns-btn').classList.remove('hidden');
   document.getElementById('records-container').classList.remove('hidden');
   document.getElementById('status-filters').classList.remove('hidden');
   document.getElementById('des-control').classList.remove('hidden');
@@ -1749,10 +1925,15 @@ function computeDashboardStats() {
   return { rows, allTypes: [...allTypes].sort(), notLoaded, from, to, hoursRows, totalHours, avgHours };
 }
 
+// Two views of the same period: Compact (as before: tasks by designer and Type,
+// then hours per designer) and Detailed (the same first table, then headline
+// numbers, the load chart, per-designer stats, hours by Type and six months).
 function renderDashboard() {
   const { rows, allTypes, notLoaded, from, to, hoursRows, totalHours, avgHours } = computeDashboardStats();
   const rangeLabel = document.getElementById('dashboard-range-label');
   rangeLabel.textContent = (from || to) ? `${from || '…'} → ${to || '…'}` : 'All time';
+  document.querySelectorAll('#dashboard-view-toggle button')
+    .forEach(b => b.classList.toggle('active', b.dataset.dashView === state.dashboardView));
 
   const area = document.getElementById('dashboard-table-area');
   area.innerHTML = '';
@@ -1764,20 +1945,34 @@ function renderDashboard() {
     area.appendChild(note);
   }
 
-  if (!rows.length) {
+  if (rows.length) {
+    renderDashboardTypeTable(area, rows, allTypes);
+  } else {
     const empty = document.createElement('p');
     empty.className = 'dash-note';
     empty.textContent = 'No "Done" or "To accept" tasks found for this period.';
     area.appendChild(empty);
-    return;
   }
 
+  if (state.dashboardView !== 'detailed') {
+    if (rows.length) renderDashboardHoursTable(area, hoursRows, totalHours, avgHours);
+    return;
+  }
+  const perf = collectPerformance(TARGET_TABLES.map(name => recordsCache[name]), parseHoursValue);
+  const range = { from, to };
+  renderPerformanceKpis(area, perf, range);
+  renderLoadChart(area, perf, range);
+  renderPerformanceTables(area, perf, range);
+}
+
+// Done + To accept per designer, broken down by Type.
+function renderDashboardTypeTable(area, rows, allTypes) {
   const maxTotal = rows[0].total;
   const table = document.createElement('table');
   table.className = 'dash-table';
 
   const caption = document.createElement('caption');
-  caption.textContent = 'Done + To accept tasks by designer, across VCP / PLM / CMC / LB';
+  caption.textContent = `Done + To accept tasks by designer, across ${TARGET_TABLES.map(t => t.replace(' Creatives', '')).join(' / ')}`;
   table.appendChild(caption);
 
   const hr = table.createTHead().insertRow();
@@ -1823,7 +2018,10 @@ function renderDashboard() {
   });
 
   area.appendChild(table);
+}
 
+// Hours per designer (Compact view).
+function renderDashboardHoursTable(area, hoursRows, totalHours, avgHours) {
   const hoursTable = document.createElement('table');
   hoursTable.className = 'dash-table';
 
@@ -1867,6 +2065,332 @@ function renderDashboard() {
   area.appendChild(hoursTable);
 }
 
+
+// ── Dashboard: load and performance ───────────────────────────────────────
+// Numbers come from performance-data.js; this part only draws them.
+
+const fmtHours = h => (h == null ? '–' : h.toFixed(1));
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDay = iso => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+const monthLabel = ym => `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(2, 4)}`;
+
+// "▲ 12%" / "▼ 8%" / "= 0%" against the period before, as text (never colour
+// alone); the class only tints it.
+function changeEl(pct, { suffix = '' } = {}) {
+  const el = document.createElement('span');
+  if (pct == null) { el.className = 'dash-change none'; el.textContent = '—'; return el; }
+  const rounded = Math.round(pct);
+  el.className = `dash-change ${rounded > 0 ? 'up' : rounded < 0 ? 'down' : 'flat'}`;
+  el.textContent = `${rounded > 0 ? '▲' : rounded < 0 ? '▼' : '='} ${Math.abs(rounded)}%${suffix}`;
+  return el;
+}
+
+function dashSection(area, title, note) {
+  const sec = document.createElement('section');
+  sec.className = 'dash-section';
+  const h = document.createElement('h3');
+  h.textContent = title;
+  sec.append(h);
+  if (note) {
+    const p = document.createElement('p');
+    p.className = 'dash-section-note';
+    p.textContent = note;
+    sec.append(p);
+  }
+  area.append(sec);
+  return sec;
+}
+
+function renderPerformanceKpis(area, perf, range) {
+  const k = performanceKpis(perf.tasks, range, perf.reworkByDes);
+  const row = document.createElement('div');
+  row.className = 'dash-kpis';
+  const tile = (label, value, sub) => {
+    const t = document.createElement('div');
+    t.className = 'dash-kpi';
+    const l = document.createElement('div');
+    l.className = 'dash-kpi-label';
+    l.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'dash-kpi-value';
+    v.textContent = value;
+    const foot = document.createElement('div');
+    foot.className = 'dash-kpi-foot';
+    foot.textContent = sub || '';
+    t.append(l, v, foot);
+    row.append(t);
+  };
+  tile('Handed in', String(k.tasks), 'Done + To accept');
+  tile('Hours logged', fmtHours(k.hours));
+  tile('Avg hours / task', fmtHours(k.avgHours), 'tasks with Hours set');
+  tile('Designers active', String(k.designers));
+  tile('In Rework now', String(k.rework), k.reworkShare == null ? '' : `${Math.round(k.reworkShare)}% of Rework + handed in`);
+  area.append(row);
+}
+
+// Tasks handed in and hours per day / week / month: two small bar charts on
+// the same buckets (never one chart with two scales). Hover shows the numbers.
+function renderLoadChart(area, perf, range) {
+  const designers = [...new Set(perf.tasks.map(t => t.des))].sort();
+  if (state.dashboardDes && !designers.includes(state.dashboardDes)) state.dashboardDes = '';
+  const series = loadSeries(perf.tasks, range, { des: state.dashboardDes, today: toISO(new Date()) });
+  const unit = { day: 'day', week: 'week', month: 'month' }[series.granularity];
+  const sec = dashSection(area, 'Load', null);
+  const head = sec.querySelector('h3');
+  const select = document.createElement('select');
+  select.id = 'dashboard-des-select';
+  [['', 'All designers'], ...designers.map(d => [d, d])].forEach(([value, label]) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.append(opt);
+  });
+  select.value = state.dashboardDes;
+  select.onchange = () => { state.dashboardDes = select.value; renderDashboard(); };
+  head.append(select);
+  if (!series.buckets.length) {
+    const p = document.createElement('p');
+    p.className = 'dash-section-note';
+    p.textContent = 'Nothing handed in for this period.';
+    sec.append(p);
+    return;
+  }
+  const label = b => (series.granularity === 'month' ? monthLabel(b.start)
+    : series.granularity === 'week' ? `${shortDay(b.start)}–${shortDay(b.end)}` : shortDay(b.start));
+  const axisLabel = b => (series.granularity === 'month' ? monthLabel(b.start) : shortDay(b.start));
+  const grid = document.createElement('div');
+  grid.className = 'dash-charts';
+  grid.append(
+    barChart(series.buckets, b => b.tasks, {
+      title: `Tasks handed in per ${unit}`, label, axisLabel,
+      tip: b => `${label(b)}: ${b.tasks} task${b.tasks === 1 ? '' : 's'} · ${fmtHours(b.hours)} h`,
+      format: v => String(Math.round(v)), minMax: 2,
+    }),
+    barChart(series.buckets, b => b.hours, {
+      title: `Hours logged per ${unit}`, label, axisLabel,
+      tip: b => `${label(b)}: ${fmtHours(b.hours)} h · ${b.tasks} task${b.tasks === 1 ? '' : 's'}`,
+      format: v => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
+      valueLabel: v => (v >= 10 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, '')),
+    }),
+  );
+  sec.append(grid);
+}
+
+// One single-series bar chart as inline SVG: rounded data ends on a zero
+// baseline, three recessive grid lines, thinned axis labels, a hover tooltip.
+function barChart(buckets, value, { title, axisLabel, tip, format, minMax, valueLabel = format }) {
+  const W = 560, H = 170, padL = 34, padR = 8, padT = 10, padB = 22;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const max = Math.max(...buckets.map(value), 0);
+  const niceMax = niceCeil(Math.max(max, minMax || 1));
+  const n = buckets.length;
+  const slot = plotW / n;
+  const barW = Math.max(2, Math.min(28, slot - 2));
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+    return e;
+  };
+  const wrap = document.createElement('figure');
+  wrap.className = 'dash-chart';
+  const cap = document.createElement('figcaption');
+  cap.textContent = title;
+  wrap.append(cap);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title });
+  [0, 0.5, 1].forEach(f => {
+    const y = padT + plotH - f * plotH;
+    svg.append(el('line', { x1: padL, x2: W - padR, y1: y, y2: y, class: f === 0 ? 'axis' : 'grid' }));
+    const t = el('text', { x: padL - 6, y: y + 3, class: 'tick', 'text-anchor': 'end' });
+    t.textContent = format(niceMax * f);
+    svg.append(t);
+  });
+  const every = Math.max(1, Math.ceil(n / 10));
+  const tipEl = document.createElement('div');
+  tipEl.className = 'dash-chart-tip hidden';
+  buckets.forEach((b, i) => {
+    const v = value(b);
+    const x = padL + i * slot + (slot - barW) / 2;
+    const h = (v / niceMax) * plotH;
+    const y0 = padT + plotH;
+    if (h > 0) {
+      const r = Math.min(4, barW / 2, h);
+      svg.append(el('path', {
+        class: 'bar',
+        d: `M${x},${y0} V${y0 - h + r} Q${x},${y0 - h} ${x + r},${y0 - h} H${x + barW - r} Q${x + barW},${y0 - h} ${x + barW},${y0 - h + r} V${y0} Z`,
+      }));
+      // The value inside the top of the bar; above it when the bar is too short.
+      const text = valueLabel(v);
+      const inside = h >= 16 && barW >= text.length * 6 + 2; // ~6 px a digit at 10 px
+      const label = el('text', {
+        x: x + barW / 2, y: inside ? y0 - h + 12 : y0 - h - 4,
+        class: inside ? 'bar-value' : 'bar-value outside', 'text-anchor': 'middle',
+      });
+      label.textContent = text;
+      svg.append(label);
+    }
+    if (i % every === 0) {
+      const t = el('text', { x: padL + i * slot + slot / 2, y: H - 6, class: 'tick', 'text-anchor': 'middle' });
+      t.textContent = axisLabel(b);
+      svg.append(t);
+    }
+    const hit = el('rect', { x: padL + i * slot, y: padT, width: slot, height: plotH, class: 'hit' });
+    hit.addEventListener('mouseenter', () => {
+      tipEl.textContent = tip(b);
+      tipEl.classList.remove('hidden');
+      hit.classList.add('on');
+      const left = ((padL + i * slot + slot / 2) / W) * 100;
+      tipEl.style.left = `${Math.min(80, Math.max(10, left))}%`;
+    });
+    hit.addEventListener('mouseleave', () => { tipEl.classList.add('hidden'); hit.classList.remove('on'); });
+    svg.append(hit);
+  });
+  wrap.append(svg, tipEl);
+  return wrap;
+}
+
+// 1, 2, 4, 6 or 8 × 10^k at or above v (halves stay whole), so the grid lines land on round numbers.
+function niceCeil(v) {
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 4, 6, 8, 10].map(m => m * p).find(c => c >= v);
+}
+
+function renderPerformanceTables(area, perf, range) {
+  // Six months first: the comparison that says whether someone is growing.
+  renderMonthlyTrend(area, perf);
+
+  // Designers in this period (tasks, hours, Rework now).
+  const rows = designerStats(perf.tasks, range, perf.reworkByDes);
+  const sec = dashSection(area, 'Designers in this period', 'Rework is what is in Rework now.');
+  const t = document.createElement('table');
+  t.className = 'dash-table';
+  const hr = t.createTHead().insertRow();
+  ['#', 'Designer', 'Tasks', 'Hours', 'Avg h / task', 'In Rework', 'Rework share'].forEach((label, i) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    if (i >= 2) th.className = 'num';
+    hr.append(th);
+  });
+  const body = t.createTBody();
+  rows.forEach((r, i) => {
+    const tr = body.insertRow();
+    const cell = (text, cls) => { const td = tr.insertCell(); td.textContent = text; if (cls) td.className = cls; return td; };
+    cell(i + 1, 'dash-rank');
+    cell(r.des, 'dash-name');
+    cell(r.tasks || '–', `num${r.tasks ? '' : ' muted'}`);
+    cell(fmtHours(r.hours), 'num');
+    cell(fmtHours(r.avgHours), 'num');
+    cell(r.rework || '–', `num${r.rework ? ' warn' : ' muted'}`);
+    cell(r.reworkShare == null ? '–' : `${Math.round(r.reworkShare)}%`, 'num');
+  });
+  sec.append(t);
+
+  // Hours per task by Type.
+  const h = hoursByType(perf.tasks, range);
+  if (h.types.length) {
+    const sec2 = dashSection(area, 'Hours per task by type', 'Average Hours of the tasks handed in that have Hours set (how many, in brackets).');
+    const t2 = document.createElement('table');
+    t2.className = 'dash-table';
+    const hr2 = t2.createTHead().insertRow();
+    ['Designer', 'All', ...h.types].forEach((label, i) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (i) th.className = 'num';
+      hr2.append(th);
+    });
+    const avgCell = (tr, c) => {
+      const td = tr.insertCell();
+      td.className = 'num';
+      if (!c) { td.textContent = '–'; td.classList.add('muted'); return; }
+      td.textContent = c.avg.toFixed(1);
+      const small = document.createElement('small');
+      small.textContent = ` (${c.n})`;
+      td.append(small);
+    };
+    const body2 = t2.createTBody();
+    h.rows.forEach(r => {
+      const tr = body2.insertRow();
+      const td = tr.insertCell(); td.textContent = r.des; td.className = 'dash-name';
+      avgCell(tr, r.all);
+      h.types.forEach(type => avgCell(tr, r.cells[type]));
+    });
+    const tot = body2.insertRow();
+    tot.className = 'total-row';
+    tot.insertCell().textContent = 'Team';
+    avgCell(tot, h.all);
+    h.types.forEach(type => avgCell(tot, h.total[type]));
+    sec2.append(t2);
+  }
+}
+
+// Six full months per designer, the current month apart, a sparkline and the
+// trend in words. Independent of the period above.
+function renderMonthlyTrend(area, perf) {
+  const m = monthlyTrend(perf.tasks, toISO(new Date()));
+  if (!m.rows.length) return;
+  const sec = dashSection(area, 'Last 6 months',
+    'Tasks handed in per month. "3 months" compares the last three full months with the three before; the trend is fitted over all six. The current month is not over yet and is shown apart.');
+  const t = document.createElement('table');
+  t.className = 'dash-table';
+  const hr = t.createTHead().insertRow();
+  ['Designer', ...m.months.map(monthLabel), `${monthLabel(m.current)} so far`, '', '3 months', 'Trend'].forEach((label, i) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    if (i) th.className = 'num';
+    hr.append(th);
+  });
+  const body = t.createTBody();
+  const addRow = (name, counts, hours, current, trend, three, cls) => {
+    const tr = body.insertRow();
+    if (cls) tr.className = cls;
+    const td = tr.insertCell(); td.textContent = name; td.className = 'dash-name';
+    counts.forEach((c, i) => {
+      const cell = tr.insertCell();
+      cell.className = `num${c ? '' : ' muted'}`;
+      cell.textContent = c || '–';
+      if (hours) cell.title = `${fmtHours(hours[i])} h`;
+    });
+    const cur = tr.insertCell(); cur.className = 'num muted'; cur.textContent = current || '–';
+    tr.insertCell().append(sparkline(counts));
+    const t3 = tr.insertCell();
+    t3.className = 'num';
+    t3.append(changeEl(three.change3));
+    t3.title = `${monthLabel(m.months[3])} – ${monthLabel(m.months[5])}: ${three.last3} · ${monthLabel(m.months[0])} – ${monthLabel(m.months[2])}: ${three.prev3}`;
+    const tc = tr.insertCell();
+    tc.className = 'num';
+    const words = { up: 'growing', down: 'falling', flat: 'steady', none: '—' }[trend.direction];
+    if (trend.pct == null || trend.direction === 'flat') {
+      tc.textContent = trend.direction === 'flat' ? `= ${words}` : words;
+    } else {
+      tc.append(changeEl(trend.pct, { suffix: '/mo' }));
+      tc.append(document.createTextNode(` ${words}`));
+    }
+    if (trend.pct != null) tc.title = `${trend.pct > 0 ? '+' : ''}${trend.pct.toFixed(1)}% a month (least-squares fit over the six full months; within ±5% counts as steady)`;
+  };
+  m.rows.forEach(r => addRow(r.des, r.counts, r.hours, r.current, r.trend, r));
+  addRow('Team', m.team.counts, null, m.team.current, m.team.trend, m.team, 'total-row');
+  sec.append(t);
+}
+
+function sparkline(values) {
+  const W = 80, H = 20;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => `${(i / (values.length - 1 || 1)) * (W - 4) + 2},${H - 2 - (v / max) * (H - 4)}`);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'dash-spark');
+  svg.setAttribute('aria-hidden', 'true');
+  const line = document.createElementNS(ns, 'polyline');
+  line.setAttribute('points', pts.join(' '));
+  svg.append(line);
+  const last = pts[pts.length - 1].split(',');
+  const dot = document.createElementNS(ns, 'circle');
+  dot.setAttribute('cx', last[0]); dot.setAttribute('cy', last[1]); dot.setAttribute('r', 2.5);
+  svg.append(dot);
+  return svg;
+}
+
 // ── Workload (manager view) ────────────────────────────────────────────────
 // Open tasks (Ready for Design + In work) per designer, and how many of them are
 // High priority, from recordsCache like the dashboard. Filters: one table and/or
@@ -1881,6 +2405,9 @@ function showWorkload() {
   document.getElementById('des-control').classList.add('hidden');
   document.getElementById('refresh-btn').classList.add('hidden');
   document.getElementById('dashboard-container').classList.add('hidden');
+  document.getElementById('view-toggle').classList.add('hidden');
+  document.getElementById('columns-btn').classList.add('hidden');
+  document.getElementById('bulk-actions-bar').classList.add('hidden');
   document.getElementById('workload-container').classList.remove('hidden');
   setStatus('Workload: open tasks per designer');
   renderWorkload();
@@ -2597,6 +3124,8 @@ const PALETTE_COMMANDS = [
   { label: 'Copy name + brief', hint: '⌘⇧C', icon: 'brief', when: hasSelection, run: () => copySelectedTasks('brief') },
   { label: 'Copy name + brief + REF', icon: 'link', when: hasSelection, run: () => copySelectedTasks('ref') },
   { label: 'Open Drive link', icon: 'external', when: panelLinkExists('Drive'), run: openPanelLink('Drive') },
+  { label: 'Open GD folder (Google Drive)', icon: 'folder', when: hasSelection, run: () => openDriveFoldersFor(
+    state.records.filter(r => state.selectedIds.has(r.id) && r.fields['Name'])) },
   { label: 'Open Figma link', icon: 'external', when: panelLinkExists('Figma'), run: openPanelLink('Figma') },
   { label: 'Open REF link', icon: 'external', when: panelLinkExists('REF'), run: openPanelLink('REF') },
   { label: 'Open task folder', icon: 'folder', when: hasTask, run: clickById('task-panel-folder-btn') },
@@ -2609,8 +3138,97 @@ const PALETTE_COMMANDS = [
   { label: 'Workload', icon: 'workload', run: clickById('workload-btn') },
   { label: 'Canvas', icon: 'lineage', run: clickById('canvas-btn') },
   { label: 'Refresh this table', icon: 'refresh', run: clickById('refresh-btn') },
+  { label: 'Reload previews', icon: 'image', run: () => {
+    const recs = (state.visibleRecords || []).filter(r => (r.fields['Preview'] || []).length);
+    recs.forEach(r => requestPreviewRefresh(r, { force: true }));
+    toast(`Reloading ${recs.length} preview${recs.length === 1 ? '' : 's'}…`);
+  } },
   { label: 'Settings', icon: 'settings', run: clickById('settings-btn') },
 ];
+// Commands built from what is loaded: every status (set it on the selection,
+// or filter by it), every designer, the dashboard periods and workload tables.
+// They come after the fixed list, so they show when typing, not on an empty
+// palette.
+const ALL_STATUSES = ['Backlog', 'Rework', 'Ready for Design', 'In work', 'To accept', 'Done'];
+
+function showTableView() {
+  if (!document.getElementById('records-container').classList.contains('hidden')) return;
+  document.querySelector(`.tab[data-table="${state.activeTable}"]`)?.click();
+}
+
+function dynamicPaletteCommands() {
+  const statuses = state.statusOptions.length ? state.statusOptions : ALL_STATUSES;
+  const setFilter = list => () => {
+    showTableView();
+    state.activeStatuses = new Set(list);
+    renderStatusChips();
+    render();
+  };
+  const setDesigner = des => () => {
+    showTableView();
+    const sel = document.getElementById('des-select');
+    sel.value = des;
+    sel.dispatchEvent(new Event('change'));
+  };
+  const presets = [...document.querySelectorAll('#dashboard-controls .dash-preset')]
+    .filter(b => b.dataset.preset !== 'custom');
+  const scopes = [...document.querySelectorAll('#workload-controls .workload-scope')];
+  return [
+    ...statuses.map(st => ({
+      label: `Set status: ${st}`, icon: 'check', when: hasSelection,
+      run: () => moveToStatus([...state.selectedIds], st),
+    })),
+    ...statuses.map(st => ({ label: `Filter status: ${st}`, icon: 'search', run: setFilter([st]) })),
+    { label: 'Filter status: all', icon: 'search', run: setFilter([]) },
+    { label: 'Designer: All', icon: 'workload', run: setDesigner('') },
+    ...state.allDES.map(d => ({ label: `Designer: ${d}`, icon: 'workload', run: setDesigner(d) })),
+    { label: 'Choose columns', icon: 'table', run: () => { showTableView(); document.getElementById('columns-btn')?.click(); } },
+    { label: 'Dashboard: Compact view', icon: 'dashboard', run: () => { document.getElementById('dashboard-btn').click(); document.querySelector('[data-dash-view="compact"]').click(); } },
+    { label: 'Dashboard: Detailed view', icon: 'dashboard', run: () => { document.getElementById('dashboard-btn').click(); document.querySelector('[data-dash-view="detailed"]').click(); } },
+    ...presets.map(b => ({
+      label: `Dashboard: ${b.textContent.trim()}`, icon: 'dashboard',
+      run: () => { document.getElementById('dashboard-btn').click(); b.click(); },
+    })),
+    ...scopes.map(b => ({
+      label: `Workload: ${b.textContent.trim()}`, icon: 'workload',
+      run: () => { document.getElementById('workload-btn').click(); b.click(); },
+    })),
+  ];
+}
+
+// A search hit's own link: Creative Link for a Video, Figma/Canvas for a Stat
+// (LB spells its Figma field with a Cyrillic "а", hence the fallback).
+function taskHitLink(hit) {
+  const names = (state.tables[hit.table]?.fields || []).map(f => f.name);
+  const wanted = linkFieldForRecord(hit);
+  let field = resolveFieldName(names, wanted);
+  if (!field && wanted === FIGMA_LINK_FIELD) field = names.find(n => /^fig/i.test(n) && /link/i.test(n));
+  const url = field ? String(hit.rec.fields[field] || '').trim() : '';
+  return { kind: wanted === FIGMA_LINK_FIELD ? 'Figma' : 'Drive', url: /^https?:\/\//i.test(url) ? url : '' };
+}
+
+async function copyPaletteText(text, what) {
+  try {
+    await window.app.copyToClipboard(text);
+    toast(`Copied ${what}`);
+  } catch (err) {
+    toastError(`Could not copy: ${err.message}`);
+  }
+}
+
+// What a task hit can do besides going to it (⌘↵ / ⇧↵ / ⌥↵).
+function taskHitActions(hit) {
+  const rec = hit.rec;
+  const name = rec.fields['Name'] || hit.name;
+  const link = taskHitLink(hit);
+  return {
+    link: link.url ? { label: `Open ${link.kind}`, run: () => window.app.openExternal(rewriteDriveLink(link.url, state.driveAccountIndex)) } : null,
+    linkKind: link.kind,
+    copyName: () => copyPaletteText(name, 'the name'),
+    copyBrief: () => copyPaletteText(formatNameAndBriefs([{ name, description: rec.fields['Description'], ref: rec.fields['REF'] }]), 'name + brief'),
+  };
+}
+
 let paletteItems = [];
 let paletteIndex = 0;
 
@@ -2629,7 +3247,7 @@ function closePalette() {
 function renderPalette() {
   const q = document.getElementById('palette-input').value.trim().toLowerCase();
   const words = q.split(/\s+/).filter(Boolean);
-  const commands = PALETTE_COMMANDS
+  const commands = [...PALETTE_COMMANDS, ...dynamicPaletteCommands()]
     .filter(c => !c.when || c.when())
     .filter(c => words.every(w => c.label.toLowerCase().includes(w)))
     .map(c => ({ kind: 'command', ...c }));
@@ -2638,9 +3256,10 @@ function renderPalette() {
       kind: 'task', label: hit.name, hint: hit.table.replace(' Creatives', ''),
       icon: FORMAT_ICONS[hit.format] || 'image',
       run: () => goToRecord(hit.rec, hit.table),
+      actions: taskHitActions(hit),
     }))
     : [];
-  paletteItems = [...commands.slice(0, q ? 8 : 12), ...tasks];
+  paletteItems = [...commands.slice(0, q ? 10 : 12), ...tasks];
   paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
   if (!q) paletteIndex = 0;
 
@@ -2658,7 +3277,7 @@ function renderPalette() {
     if (item.kind !== lastKind) {
       const group = document.createElement('div');
       group.className = 'palette-group';
-      group.textContent = item.kind === 'task' ? 'Tasks' : 'Actions';
+      group.textContent = item.kind === 'task' ? 'Tasks · ↵ go to · ⌘↵ open link · ⇧↵ copy name · ⌥↵ name + brief' : 'Actions';
       list.append(group);
       lastKind = item.kind;
     }
@@ -2676,6 +3295,21 @@ function renderPalette() {
       hint.textContent = item.hint;
       row.append(hint);
     }
+    if (item.actions) {
+      const act = (icon, title, fn, disabled) => {
+        const b = document.createElement('button');
+        b.className = 'palette-act';
+        b.innerHTML = iconSvg(icon);
+        b.title = title;
+        b.disabled = !!disabled;
+        b.onclick = e => { e.stopPropagation(); closePalette(); fn(); };
+        row.append(b);
+      };
+      const a = item.actions;
+      act('external', a.link ? `${a.link.label} (⌘↵)` : `No ${a.linkKind} link yet`, () => a.link && a.link.run(), !a.link);
+      act('copy', 'Copy name (⇧↵)', a.copyName);
+      act('brief', 'Copy name + brief (⌥↵)', a.copyBrief);
+    }
     row.onmousemove = () => { if (paletteIndex !== i) { paletteIndex = i; highlightPalette(); } };
     row.onclick = () => runPaletteItem(i);
     list.append(row);
@@ -2687,9 +3321,20 @@ function highlightPalette() {
   document.querySelector('#palette-list .palette-item.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-function runPaletteItem(i) {
+// `mod` picks a task hit's other action: 'link' (⌘↵), 'name' (⇧↵), 'brief' (⌥↵).
+function runPaletteItem(i, mod = null) {
   const item = paletteItems[i];
   if (!item) return;
+  if (mod && item.actions) {
+    const a = item.actions;
+    if (mod === 'link' && !a.link) { toast(`${item.label} has no ${a.linkKind} link yet`); return; }
+    closePalette();
+    log(`palette: task "${item.label}" ${mod}`);
+    if (mod === 'link') a.link.run();
+    else if (mod === 'name') a.copyName();
+    else a.copyBrief();
+    return;
+  }
   closePalette();
   log(`palette: ${item.kind} "${item.label}"`);
   item.run();
@@ -3255,6 +3900,123 @@ function creativeLinkFieldName() {
   );
 }
 
+// Creative Links from Google Drive: each task's own folder, matched by name, so
+// no order can go wrong. Pasted links (the box above) take over when present.
+let autofillDriveResult = null;
+let autofillDriveSeq = 0;
+
+// The lookup in flight (Open GD Folder waits for it instead of starting its own).
+let autofillDrivePromise = null;
+
+async function findAutofillLinksOnDrive() {
+  const status = document.getElementById('autofill-drive-status');
+  const btn = document.getElementById('autofill-find-drive-btn');
+  if (!driveConfigured()) { toastError('Set the Google Drive root folder in Settings → Google Drive (rclone) first.'); return; }
+  const seq = ++autofillDriveSeq;
+  const records = pendingAutofillCandidates.map(c => c.rec);
+  const started = Date.now();
+  btn.disabled = true;
+  status.className = 'drive-status';
+  const tick = () => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    status.textContent = `Looking for the task folders on Google Drive… ${secs} s`
+      + (secs >= 10 ? ' (the first time takes a minute or two)' : '');
+  };
+  tick();
+  const timer = setInterval(() => { if (seq === autofillDriveSeq) tick(); }, 1000);
+  autofillDrivePromise = findDriveFolders(records);
+  try {
+    const result = await autofillDrivePromise;
+    if (seq !== autofillDriveSeq || document.getElementById('autofill-approval-modal').classList.contains('hidden')) return;
+    autofillDriveResult = result;
+    const found = records.filter(r => (result.matches[r.fields['Name']] || []).length).length;
+    status.className = `drive-status ${found === records.length ? 'ok' : 'warn'}`;
+    status.textContent = `Google Drive: ${found} of ${records.length} task folders found`
+      + (result.unknownCodes.length ? ` · no app folder holds ${result.unknownCodes.join(', ')}` : '');
+    renderLinkPairs();
+  } catch (err) {
+    if (seq !== autofillDriveSeq) return;
+    status.className = 'drive-status bad';
+    status.textContent = `Google Drive: ${err.message}`;
+    log(`findAutofillLinksOnDrive: FAILED — ${err.message}`);
+  } finally {
+    clearInterval(timer);
+    if (seq === autofillDriveSeq) { btn.disabled = false; autofillDrivePromise = null; }
+  }
+}
+
+function renderDriveLinkPairs() {
+  const listEl = document.getElementById('autofill-links-pairs');
+  const warning = document.getElementById('autofill-links-warning');
+  const field = creativeLinkFieldName();
+  listEl.innerHTML = '';
+  pendingLinkPairs = [];
+  if (!field) {
+    warning.textContent = `This table has no "${CREATIVE_LINK_FIELD}" field — links cannot be saved.`;
+    warning.className = 'links-bad';
+    return;
+  }
+  const rows = pendingAutofillCandidates
+    .map(c => ({ c, name: c.rec.fields['Name'] || '' }))
+    .sort((a, b) => compareTaskNames(a.name, b.name));
+  rows.forEach(({ c, name }) => {
+    const hits = autofillDriveResult.matches[name] || [];
+    const existing = String(c.rec.fields[field] || '').trim();
+    const hit = hits[0];
+    const link = hit ? driveFolderLink(hit.id) : '';
+    const same = existing && link && existing.includes(hit.id);
+    const row = document.createElement('label');
+    row.className = 'link-pair-row' + (hit ? '' : ' link-pair-missing') + (existing ? ' has-existing' : '');
+    if (hit) {
+      // A second folder with the same name, or a link already set, is left
+      // for the designer to tick.
+      const pair = {
+        task: { id: c.rec.id, name, existingLink: existing, candidate: c },
+        link, hasExisting: !!existing, existingLink: existing,
+        include: !existing && hits.length === 1,
+      };
+      pendingLinkPairs.push(pair);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = pair.include;
+      cb.onchange = () => { pair.include = cb.checked; };
+      row.append(cb);
+    } else {
+      const gap = document.createElement('span');
+      gap.className = 'link-pair-nobox';
+      row.append(gap);
+    }
+    const nameEl = document.createElement('span');
+    nameEl.className = 'link-pair-task';
+    nameEl.textContent = name;
+    row.append(nameEl);
+    if (hit) {
+      const open = document.createElement('button');
+      open.className = 'link-pair-url-btn';
+      open.type = 'button';
+      const parts = hit.path.split('/');
+      open.textContent = `${parts[0].replace(/_creatives$/, '')} · ${parts[2]}`;
+      open.title = `Open the folder on Drive: ${hit.path}`;
+      open.onclick = e => { e.preventDefault(); window.app.openExternal(rewriteDriveLink(link, state.driveAccountIndex)); };
+      row.append(open);
+    }
+    const flag = document.createElement('span');
+    flag.className = 'link-pair-flag';
+    if (!hit) {
+      flag.textContent = 'not found on Drive';
+      flag.title = `Looked in ${autofillDriveResult.months.map(m => m.path).join(', ') || 'no month folder'}`;
+    }
+    else if (same) flag.textContent = 'link already set';
+    else if (hits.length > 1) { flag.textContent = `${hits.length} folders with this name, newest picked`; flag.title = hits.map(h => h.path).join('\n'); }
+    else if (existing) { flag.textContent = 'already has another link'; flag.title = existing; }
+    if (flag.textContent) row.append(flag);
+    listEl.append(row);
+  });
+  const ticked = pendingLinkPairs.filter(p => p.include).length;
+  warning.textContent = `${ticked} Creative Link${ticked === 1 ? '' : 's'} from Google Drive will be written. Paste links above to use those instead.`;
+  warning.className = 'links-ok';
+}
+
 // Renders the task ↔ link pairing for review. Every pair is shown with a
 // checkbox, and a task that already holds a link keeps its position in the
 // order — dropping it would shift every later link onto the wrong task — but
@@ -3270,7 +4032,11 @@ function renderLinkPairs() {
   pendingLinkPairs = [];
 
   const raw = textarea.value.trim();
-  if (!raw) return;
+  if (!raw) {
+    // Nothing pasted: the folders found on Drive are the pairing.
+    if (autofillDriveResult) renderDriveLinkPairs();
+    return;
+  }
 
   if (!field) {
     warning.textContent = `This table has no "${CREATIVE_LINK_FIELD}" field — links cannot be saved.`;
@@ -3409,7 +4175,14 @@ async function renderAutofillApprovalList() {
   // previous run would pair them against different tasks.
   document.getElementById('autofill-links').value = '';
   pendingLinkOrder = null;
+  autofillDriveResult = null;
   renderLinkPairs();
+  document.getElementById('autofill-drive-status').textContent = '';
+  autofillDriveSeq++; // a lookup still running from an earlier opening is ignored
+  autofillDrivePromise = null;
+  document.getElementById('autofill-find-drive-btn').disabled = false;
+  document.getElementById('autofill-find-drive-btn').classList.toggle('hidden', !driveConfigured());
+  if (driveConfigured() && pendingAutofillCandidates.some(c => !isStatCandidate(c))) findAutofillLinksOnDrive();
 
   const statCount = pendingAutofillCandidates.filter(isStatCandidate).length;
   const figmaRow = document.getElementById('autofill-figma-row');
@@ -3493,6 +4266,16 @@ async function renderAutofillApprovalList() {
       const line = document.createElement('div');
       line.className = 'autofill-approval-line autofill-approval-line-empty';
       line.textContent = 'No match found';
+      info.appendChild(line);
+    }
+
+    // Timing comes from the 9x16 master; a newer repeat render means it may be
+    // the old cut. Warn only here: replacing it mid-review would change the list.
+    const ready = readinessFor(c.rec);
+    if (ready && ready.promote) {
+      const line = repeatWarningEl({ warning: ready.warning, promote: null });
+      line.classList.remove('mild');
+      line.title = 'Close Autofill and use the newer render as the master first (side panel or Resize).';
       info.appendChild(line);
     }
 
@@ -3735,6 +4518,7 @@ async function openResizeModal(mode = 'resize', { chain = false } = {}) {
     const [found, settings] = await Promise.all([
       window.app.findAllFiles(state.workingDirectory, records.map(sourceName)),
       window.app.getSettings(),
+      refreshTaskFileIndex(true), // fresh, for the _9x16_1 repeat-render warning
     ]);
     resizeState.custom = (settings.resizeCustomSizes || []).filter(k => targetFromKey(k));
     // Last run's choices, so a designer who always adds 1.91x1 (or never wants
@@ -3758,7 +4542,7 @@ async function openResizeModal(mode = 'resize', { chain = false } = {}) {
         log(`openResizeModal: ${name} skipped, ${sourceName(rec)} found in ${pick.paths.length} places: ${pick.paths.join(' | ')}`);
       }
       return {
-        id: rec.id, name, base: stripAspectRatio(name), source: pick.path || null, sourceNote,
+        id: rec.id, rec, name, base: stripAspectRatio(name), source: pick.path || null, sourceNote,
         info: null, existing: [], over: null, videoCount: 0,
         state: null, label: null, fraction: 0, seconds: null, error: null, compressed: null,
       };
@@ -3963,6 +4747,20 @@ function renderResizeModal() {
 
     row.append(name, src, status);
     list.appendChild(row);
+    // A newer After Effects repeat render (_9x16_1) next to the master: the
+    // source may be the stale render. Offer to use the new one before running.
+    const ready = !s.running && task.rec ? readinessFor(task.rec) : null;
+    if (ready && ready.warning) {
+      list.appendChild(repeatWarningEl(ready, async () => {
+        if (!task.source && ready.promote) {
+          const found = await window.app.findAllFiles(state.workingDirectory, [`${task.base}_9x16.mp4`]);
+          const pick = pickResizeSource(task.name, found[`${task.base}_9x16.mp4`]);
+          task.source = pick.path || null;
+          task.sourceNote = pick.path ? null : task.sourceNote;
+        }
+        await inspectResizeTasks();
+      }));
+    }
   });
 
   // Footer.
@@ -4169,7 +4967,61 @@ function showSettingsModal(forced = false) {
   document.getElementById('api-key-input').value = '';
   document.getElementById('working-dir-input').value = state.workingDirectory || '';
   document.getElementById('drive-account-index-input').value = state.driveAccountIndex || '';
+  document.getElementById('drive-root-input').value = state.driveRootFolderId ? driveFolderLink(state.driveRootFolderId) : '';
+  document.getElementById('rclone-remote-input').value = state.rcloneRemote || '';
+  document.getElementById('drive-check-status').textContent = '';
+  refreshDriveConnectStatus();
   document.getElementById('api-key-input').focus();
+}
+
+// ── Google Drive through rclone (read only) ─────────────────────────────────
+// main.js runs rclone (drive-rclone.js); drive-index.js matches names. Each
+// task's Drive folder becomes its Creative Link in Autofill, and "Open GD
+// Folder" opens the task's folder (one task) or its month folder.
+
+function driveConfigured() {
+  return !!state.driveRootFolderId;
+}
+
+// Months to look in for these records: this month, last month, then the months
+// of their Date Done.
+function driveMonthsFor(records) {
+  return monthsToSearch(toISO(new Date()), records.map(r => r.fields['Date Done']).filter(Boolean));
+}
+
+async function findDriveFolders(records) {
+  const names = records.map(r => r.fields['Name']).filter(Boolean);
+  return window.app.driveFindTaskFolders(names, driveMonthsFor(records));
+}
+
+// "Open GD Folder": one task found -> its folder; otherwise the month folders
+// its tasks were found in (or this month's folder of their app).
+async function openDriveFoldersFor(records, { result = null } = {}) {
+  if (!driveConfigured()) {
+    toastError('Set the Google Drive root folder in Settings → Google Drive (rclone) first.');
+    return;
+  }
+  try {
+    const r = result || await findDriveFolders(records);
+    const hits = records.map(rec => (r.matches[rec.fields['Name']] || [])[0]).filter(Boolean);
+    let ids;
+    if (records.length === 1 && hits.length === 1) {
+      ids = [hits[0].id];
+    } else {
+      const monthPaths = new Set(hits.map(h => h.path.split('/').slice(0, 3).join('/')));
+      ids = r.months.filter(m => monthPaths.has(m.path)).map(m => m.id);
+      if (!ids.length && r.months.length) ids = [r.months[0].id];
+    }
+    if (!ids.length) {
+      toastError(r.unknownCodes && r.unknownCodes.length
+        ? `No app folder on Drive holds ${r.unknownCodes.join(', ')} tasks.`
+        : 'No folder found on Drive for these tasks.');
+      return;
+    }
+    [...new Set(ids)].slice(0, 3).forEach(id => window.app.openExternal(rewriteDriveLink(driveFolderLink(id), state.driveAccountIndex)));
+  } catch (err) {
+    toastError(`Google Drive: ${err.message}`);
+  }
 }
 
 function hideSettingsModal() {
@@ -4210,7 +5062,7 @@ document.getElementById('palette-input').addEventListener('keydown', e => {
     highlightPalette();
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    runPaletteItem(paletteIndex);
+    runPaletteItem(paletteIndex, e.metaKey || e.ctrlKey ? 'link' : e.shiftKey ? 'name' : e.altKey ? 'brief' : null);
   } else if (e.key === 'Escape') {
     e.preventDefault();
     closePalette();
@@ -4428,6 +5280,13 @@ document.getElementById('autofill-approval-modal').addEventListener('click', e =
   if (e.target.id === 'autofill-approval-modal') closeAutofillModal();
 });
 
+document.getElementById('dashboard-view-toggle').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-dash-view]');
+  if (!btn || btn.dataset.dashView === state.dashboardView) return;
+  state.dashboardView = btn.dataset.dashView;
+  try { localStorage.setItem('higgtable_dash_view', state.dashboardView); } catch { /* per-viewer convenience only */ }
+  renderDashboard();
+});
 document.getElementById('dashboard-controls').addEventListener('click', e => {
   const btn = e.target.closest('.dash-preset');
   if (!btn) return;
@@ -4467,6 +5326,98 @@ document.getElementById('browse-dir-btn').addEventListener('click', async () => 
   document.getElementById('working-dir-input').value = dir;
   await window.app.saveSettings({ workingDirectory: dir });
   log(`browse-dir-btn: working directory set to ${dir}`);
+});
+
+document.getElementById('autofill-open-drive-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('autofill-open-drive-btn');
+  btn.disabled = true;
+  try {
+    // While Autofill's own lookup runs, wait for it rather than start another.
+    let result = autofillDriveResult;
+    if (!result && autofillDrivePromise) result = await autofillDrivePromise.catch(() => null);
+    await openDriveFoldersFor(pendingAutofillCandidates.map(c => c.rec), { result });
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('autofill-find-drive-btn').addEventListener('click', () => findAutofillLinksOnDrive());
+document.getElementById('drive-root-input').addEventListener('change', async e => {
+  const raw = e.target.value.trim();
+  const id = raw ? folderIdFromInput(raw) : '';
+  if (raw && !id) {
+    toastError('That is not a Drive folder link: open the folder in Drive and copy the address (it contains "/folders/").');
+    e.target.value = state.driveRootFolderId ? driveFolderLink(state.driveRootFolderId) : '';
+    return;
+  }
+  state.driveRootFolderId = id;
+  e.target.value = id ? driveFolderLink(id) : '';
+  await window.app.saveSettings({ driveRootFolderId: id });
+  log(`drive-root-input: root folder ${id || '(cleared)'}`);
+});
+document.getElementById('rclone-remote-input').addEventListener('change', async e => {
+  const value = e.target.value.trim();
+  if (value && !/^[A-Za-z0-9_.-]+$/.test(value)) { toastError('An rclone remote name has only letters, digits, "_", "." and "-".'); return; }
+  state.rcloneRemote = value;
+  await window.app.saveSettings({ rcloneRemote: value });
+});
+// Settings: whether the rclone remote exists, and a button that creates it
+// (rclone opens Google's sign-in in the browser and waits for it).
+async function refreshDriveConnectStatus() {
+  const status = document.getElementById('drive-connect-status');
+  const btn = document.getElementById('drive-connect-btn');
+  status.className = '';
+  status.textContent = 'Checking rclone…';
+  try {
+    const st = await window.app.driveStatus();
+    btn.classList.toggle('hidden', st.connected);
+    status.className = st.connected ? 'ok' : '';
+    status.textContent = st.connected
+      ? `Connected (${st.remote}, ${st.version})`
+      : `Not connected yet (${st.version})`;
+  } catch (err) {
+    btn.classList.remove('hidden');
+    status.className = 'bad';
+    status.textContent = err.message;
+  }
+}
+document.getElementById('drive-connect-btn').addEventListener('click', async () => {
+  const status = document.getElementById('drive-connect-status');
+  const btn = document.getElementById('drive-connect-btn');
+  btn.disabled = true;
+  status.className = '';
+  status.textContent = 'Sign in to Google in the browser window that opened, then come back here…';
+  try {
+    await window.app.driveConnect();
+    toast('Google Drive connected');
+  } catch (err) {
+    toastError(`Google Drive: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    refreshDriveConnectStatus();
+  }
+});
+document.getElementById('drive-check-btn').addEventListener('click', async () => {
+  const status = document.getElementById('drive-check-status');
+  const btn = document.getElementById('drive-check-btn');
+  btn.disabled = true;
+  status.className = '';
+  status.textContent = 'Checking…';
+  try {
+    const { apps } = await window.app.driveCheck();
+    status.className = 'ok';
+    status.textContent = `Works: ${apps.length} folders, e.g. ${apps.slice(0, 3).join(', ')}`;
+  } catch (err) {
+    status.className = 'bad';
+    status.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('settings-modal').addEventListener('click', e => {
+  const link = e.target.closest('a[data-external]');
+  if (!link) return;
+  e.preventDefault();
+  window.app.openExternal(link.href);
 });
 
 document.getElementById('drive-account-index-input').addEventListener('change', async (e) => {

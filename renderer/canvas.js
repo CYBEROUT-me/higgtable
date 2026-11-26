@@ -78,6 +78,7 @@ function showCanvasTab() {
   document.getElementById('multiselect-hint').classList.add('hidden');
   document.getElementById('columns-btn').classList.add('hidden');
   document.getElementById('refresh-btn').classList.add('hidden');
+  document.getElementById('bulk-actions-bar').classList.add('hidden');
   document.getElementById('canvas-container').classList.remove('hidden');
   setStatus('Canvas: lineage view');
   renderChainList();
@@ -85,6 +86,7 @@ function showCanvasTab() {
 
 function hideCanvasTab() {
   document.getElementById('canvas-container').classList.add('hidden');
+  document.getElementById('bulk-actions-bar').classList.remove('hidden');
   document.getElementById('records-container').classList.remove('hidden');
   document.getElementById('status-filters').classList.remove('hidden');
   document.getElementById('des-control').classList.remove('hidden');

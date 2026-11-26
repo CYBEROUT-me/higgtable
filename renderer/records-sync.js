@@ -42,9 +42,41 @@ function usableCache(payload, tableId) {
     && Array.isArray(payload.records) && payload.syncedAt > 0 && payload.fullSyncedAt > 0;
 }
 
+// Airtable attachment links are signed and stop working 2-4 hours after they
+// were fetched: ".../v3/u/<n>/<n>/<expiry in ms>/<sig>/<sig>". The disk cache
+// and incremental syncs keep records (and their links) much longer, so the
+// Preview images of unchanged tasks break unless their links are fetched again.
+const PREVIEW_REFRESH_MARGIN_MS = 10 * 60 * 1000;
+const RECORD_ID_RE = /^rec[A-Za-z0-9]{14}$/;
+
+// When an attachment link expires (ms since epoch), or null when it cannot tell.
+function attachmentUrlExpiry(url) {
+  const m = /airtableusercontent\.com\/v\d+\/u\/\d+\/\d+\/(\d{12,})\//.exec(String(url || ''));
+  return m ? Number(m[1]) : null;
+}
+
+// Whether a record's Preview links have expired or will within the margin.
+// A link whose expiry cannot be read is left alone (the <img> error handler
+// catches those).
+function previewNeedsRefresh(rec, now, margin = PREVIEW_REFRESH_MARGIN_MS) {
+  const att = ((rec && rec.fields && rec.fields['Preview']) || [])[0];
+  if (!att) return false;
+  const thumb = att.thumbnails && att.thumbnails.small && att.thumbnails.small.url;
+  const expiry = attachmentUrlExpiry(thumb || att.url);
+  return expiry !== null && expiry < now + margin;
+}
+
+// filterByFormula that fetches exactly these records. Anything that is not a
+// record id is dropped, so nothing else can reach the formula. null if none.
+function recordIdsFormula(ids) {
+  const valid = (ids || []).filter(id => RECORD_ID_RE.test(String(id)));
+  if (!valid.length) return null;
+  return `OR(${valid.map(id => `RECORD_ID()='${id}'`).join(',')})`;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    RECORDS_CACHE_VERSION, SYNC_OVERLAP_MS, FULL_SYNC_EVERY_MS,
-    mergeChangedRecords, incrementalSince, usableCache,
+    RECORDS_CACHE_VERSION, SYNC_OVERLAP_MS, FULL_SYNC_EVERY_MS, PREVIEW_REFRESH_MARGIN_MS,
+    mergeChangedRecords, incrementalSince, usableCache, attachmentUrlExpiry, previewNeedsRefresh, recordIdsFormula,
   };
 }

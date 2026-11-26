@@ -5,6 +5,8 @@ const { autoUpdater } = require('electron-updater');
 const { fetchBases, fetchTables, fetchRecords, uploadAttachment, updateRecord, updateRecords } = require('./airtable');
 const { resolveBinary, probeVideo, renderPlan, compressVideo } = require('./resizer');
 const resizePlan = require('./renderer/resize-plan');
+const { recordIdsFormula } = require('./renderer/records-sync');
+const { DriveIndex } = require('./drive-rclone');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -314,6 +316,24 @@ ipcMain.handle('get-records', async (event, baseId, tableId, requestId, modified
   }
 });
 
+// Fresh copies of a few records, for Preview links that have expired (Airtable
+// signs attachment links for a few hours only). At most 50 ids per call.
+ipcMain.handle('get-records-by-id', async (_e, baseId, tableId, ids) => {
+  const key = getApiKey();
+  if (!key) throw new Error('NO_API_KEY');
+  const formula = recordIdsFormula((ids || []).slice(0, 50));
+  if (!formula) return [];
+  const t0 = Date.now();
+  try {
+    const records = await fetchRecords(key, baseId, tableId, log, undefined, formula);
+    log(`get-records-by-id: table=${tableId} ${records.length}/${ids.length} record(s) in ${Date.now() - t0}ms`);
+    return records;
+  } catch (err) {
+    log(`get-records-by-id: table=${tableId} FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    throw new Error(`get-records-by-id failed: ${err.message}`);
+  }
+});
+
 const IMAGE_CONTENT_TYPES = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
@@ -408,6 +428,40 @@ ipcMain.handle('copy-to-clipboard', (_e, text) => {
 
 ipcMain.handle('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+
+// Google Drive through rclone, read only (drive-rclone.js): find each task's
+// folder for its Creative Link, and the month folders for "Open GD Folder".
+const driveIndex = new DriveIndex({
+  getSettings: loadSettingsFile,
+  saveSettings: data => saveSettingsFile({ ...loadSettingsFile(), ...data }),
+  log,
+  bundledRclone: () => resizeBinary('rclone'),
+});
+ipcMain.handle('drive-find-task-folders', async (_e, names, months) => {
+  if (!Array.isArray(names) || !Array.isArray(months)) throw new Error('Bad arguments');
+  const t0 = Date.now();
+  try {
+    const result = await driveIndex.findTaskFolders(names.map(String).slice(0, 500), months.map(String).slice(0, 6));
+    const found = Object.values(result.matches).filter(m => m.length).length;
+    log(`drive-find-task-folders: ${found}/${names.length} found in ${Date.now() - t0}ms`);
+    return result;
+  } catch (err) {
+    log(`drive-find-task-folders: FAILED after ${Date.now() - t0}ms — ${err.message}`);
+    throw new Error(err.message);
+  }
+});
+ipcMain.handle('drive-status', async () => {
+  try { return await driveIndex.status(); }
+  catch (err) { log(`drive-status: FAILED — ${err.message}`); throw new Error(err.message); }
+});
+ipcMain.handle('drive-connect', async () => {
+  try { return await driveIndex.connect(); }
+  catch (err) { log(`drive-connect: FAILED — ${err.message}`); throw new Error(err.message); }
+});
+ipcMain.handle('drive-check', async () => {
+  try { return await driveIndex.check(); }
+  catch (err) { log(`drive-check: FAILED — ${err.message}`); throw new Error(err.message); }
 });
 
 ipcMain.handle('get-settings', () => loadSettingsFile());
@@ -785,7 +839,9 @@ ipcMain.handle('open-task-folder', (_e, dir, taskName, base) => {
 // panel: every "<name>_<ratio|WxH>.(mp4|png|jpg|jpeg)" with its size, as
 // [lowercased name, bytes, path]. Folders AE collects footage into are walked
 // too; the renderer keeps the first hit per name.
-const TASK_FILE_RE = /_\d+(?:\.\d+)?x\d+\.(mp4|png|jpe?g)$/i;
+// Task files end in "_<ratio>.<ext>"; "_9x16_1.mp4" (After Effects' repeat
+// render when the master exists) is indexed too, for the duplicate warning.
+const TASK_FILE_RE = /_\d+(?:\.\d+)?x\d+(?:_\d+)?\.(mp4|png|jpe?g)$/i;
 ipcMain.handle('index-task-files', (_e, dir) => {
   const t0 = Date.now();
   const out = [];
@@ -796,12 +852,29 @@ ipcMain.handle('index-task-files', (_e, dir) => {
       const full = path.join(d, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       if (!TASK_FILE_RE.test(entry.name)) continue;
-      try { out.push([entry.name.toLowerCase(), fs.statSync(full).size, full]); } catch {}
+      try {
+        const st = fs.statSync(full);
+        out.push([entry.name.toLowerCase(), st.size, full, st.mtimeMs]);
+      } catch {}
     }
   };
   if (dir) walk(dir);
   log(`index-task-files: ${out.length} file(s) in ${Date.now() - t0}ms`);
   return out;
+});
+
+// Makes a repeat render ("X_9x16_1.mp4") the master ("X_9x16.mp4") in the same
+// folder. One rename over the old master, never delete-then-rename, so a crash
+// cannot lose both. The old master is replaced, like Compress does.
+ipcMain.handle('promote-repeat-render', (_e, repeatPath) => {
+  if (typeof repeatPath !== 'string' || !fs.existsSync(repeatPath)) throw new Error('The repeat render is gone');
+  const name = path.basename(repeatPath);
+  const m = /^(.+_\d+(?:\.\d+)?x\d+)_\d+(\.mp4)$/i.exec(name);
+  if (!m) throw new Error(`Not a repeat render: ${name}`);
+  const target = path.join(path.dirname(repeatPath), m[1] + m[2]);
+  fs.renameSync(repeatPath, target);
+  log(`promote-repeat-render: ${name} -> ${path.basename(target)} in ${path.dirname(repeatPath)}`);
+  return target;
 });
 
 ipcMain.handle('reveal-file', (_e, filePath) => {

@@ -72,3 +72,64 @@ describe('stepSummary', () => {
     expect(stepSummary([{ handedIn: true, missing: [], ready: true }]).next).toBeNull();
   });
 });
+
+describe('repeat renders (_9x16_1)', () => {
+  const { findRepeatRenders, repeatToPromote, masterNameForRepeat, repeatWarning } = require('../renderer/readiness-data');
+  const b = 'LO_15945_13140_M0_S0_GR_usr_ARI_ILU_Video_VAR_Mix';
+  const l = s => `${b}${s}`.toLowerCase();
+
+  test('a newer _9x16_1 next to the master is flagged and promoted', () => {
+    const index = buildFileIndex([[l('_9x16.mp4'), 1, '/w/m', 100], [l('_9x16_1.mp4'), 2, '/w/r1', 200]]);
+    const reps = findRepeatRenders(b, index);
+    expect(reps).toEqual([{ n: 1, name: l('_9x16_1.mp4'), bytes: 2, path: '/w/r1', mtime: 200, newer: true }]);
+    expect(repeatToPromote(reps).path).toBe('/w/r1');
+    expect(repeatWarning(reps)).toBe('newer render in _9x16_1');
+  });
+
+  test('an older repeat is only a note, with nothing to promote', () => {
+    const index = buildFileIndex([[l('_9x16.mp4'), 1, '/w/m', 300], [l('_9x16_1.mp4'), 2, '/w/r1', 200]]);
+    const reps = findRepeatRenders(b, index);
+    expect(reps[0].newer).toBe(false);
+    expect(repeatToPromote(reps)).toBeNull();
+    expect(repeatWarning(reps)).toBe('old _9x16_1 next to the master');
+  });
+
+  test('picks the newest of several newer repeats; a missing master or time counts as newer', () => {
+    const index = buildFileIndex([
+      [l('_9x16.mp4'), 1, '/w/m', 100], [l('_9x16_1.mp4'), 2, '/w/r1', 300], [l('_9x16_2.mp4'), 2, '/w/r2', 200],
+    ]);
+    expect(repeatToPromote(findRepeatRenders(b, index)).n).toBe(1);
+    const noMaster = buildFileIndex([[l('_9x16_1.mp4'), 2, '/w/r1', 5]]);
+    expect(findRepeatRenders(b, noMaster)[0].newer).toBe(true);
+    const noTime = buildFileIndex([[l('_9x16.mp4'), 1, '/w/m'], [l('_9x16_1.mp4'), 2, '/w/r1']]);
+    expect(findRepeatRenders(b, noTime)[0].newer).toBe(true);
+  });
+
+  test('no repeats, no warning', () => {
+    expect(findRepeatRenders(b, buildFileIndex([[l('_9x16.mp4'), 1, '/w/m', 1]]))).toEqual([]);
+    expect(repeatWarning([])).toBeNull();
+  });
+
+  test('masterNameForRepeat strips the repeat number only', () => {
+    expect(masterNameForRepeat('X_9x16_1.mp4')).toBe('X_9x16.mp4');
+    expect(masterNameForRepeat('X_1.91x1_12.MP4')).toBe('X_1.91x1.MP4');
+    expect(masterNameForRepeat('X_9x16.mp4')).toBeNull();
+    expect(masterNameForRepeat('X_9x16_1.png')).toBeNull();
+  });
+
+  test('readiness carries the warning without blocking ready; stepSummary counts it', () => {
+    const index = buildFileIndex([
+      ...['9x16', '1x1', '4x5', '16x9'].map(s => [l(`_${s}.mp4`), 1, 'p', 100]),
+      [l('_9x16_1.mp4'), 2, '/w/r1', 200],
+    ]);
+    const rec = { id: 'x', fields: { Name: `${b}_9x16`, Format: 'Video', Status: 'In work',
+      Timing: '30s', 'Creative Link': 'https://x', Preview: [{}], Hours: '01:00' } };
+    const r = taskReadiness(rec, taskFiles(b, index), FIELDS);
+    expect(r.ready).toBe(true);
+    expect(r.warning).toBe('newer render in _9x16_1');
+    expect(r.promote.path).toBe('/w/r1');
+    expect(stepSummary([r]).warnings).toBe(1);
+    const handed = taskReadiness({ ...rec, fields: { ...rec.fields, Status: 'Done' } }, taskFiles(b, index), FIELDS);
+    expect(handed.warning).toBeNull();
+  });
+});

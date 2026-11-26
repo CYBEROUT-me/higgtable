@@ -7,18 +7,20 @@
     "start": "electron .",
     "test": "jest",
     "fetch-ffmpeg": "node scripts/fetch-ffmpeg.js",
-    "prebuild": "npm run fetch-ffmpeg",
+    "prebuild": "npm run fetch-binaries",
     "build": "electron-builder --mac",
-    "prebuild:win": "npm run fetch-ffmpeg",
+    "prebuild:win": "npm run fetch-binaries",
     "build:win": "electron-builder --win",
-    "prebuild:all": "npm run fetch-ffmpeg",
+    "prebuild:all": "npm run fetch-binaries",
     "build:all": "electron-builder --mac --win",
-    "prerelease": "npm run fetch-ffmpeg",
+    "prerelease": "npm run fetch-binaries",
     "release": "electron-builder --mac --win --publish always",
-    "prerelease:mac": "npm run fetch-ffmpeg",
+    "prerelease:mac": "npm run fetch-binaries",
     "release:mac": "electron-builder --mac --publish always",
-    "prerelease:win": "npm run fetch-ffmpeg",
-    "release:win": "electron-builder --win --publish always"
+    "prerelease:win": "npm run fetch-binaries",
+    "release:win": "electron-builder --win --publish always",
+    "fetch-rclone": "node scripts/fetch-rclone.js",
+    "fetch-binaries": "node scripts/fetch-ffmpeg.js && node scripts/fetch-rclone.js"
   },
   "devDependencies": {
     "electron": "^28.0.0",
@@ -49,7 +51,9 @@
           "ffmpeg",
           "ffprobe",
           "ffmpeg.exe",
-          "ffprobe.exe"
+          "ffprobe.exe",
+          "rclone",
+          "rclone.exe"
         ]
       }
     ],

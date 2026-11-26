@@ -159,11 +159,17 @@
   </div>
   <div id="dashboard-container" class="hidden">
     <div id="dashboard-controls">
+      <div id="dashboard-view-toggle" role="group" aria-label="Dashboard view">
+        <button data-dash-view="compact" title="Tasks and hours per designer">Compact</button>
+        <button data-dash-view="detailed" title="Adds load charts, six months per designer, hours by type and Rework">Detailed</button>
+      </div>
       <span class="dash-controls-label">Period:</span>
       <button class="dash-preset" data-preset="week">This week</button>
       <button class="dash-preset" data-preset="lastWeek">Last week</button>
       <button class="dash-preset" data-preset="month">This month</button>
       <button class="dash-preset" data-preset="prevMonth">Previous month</button>
+      <button class="dash-preset" data-preset="quarter">This quarter</button>
+      <button class="dash-preset" data-preset="prevQuarter">Previous quarter</button>
       <button class="dash-preset" data-preset="all">All time</button>
       <button class="dash-preset" data-preset="custom">Custom</button>
       <span id="dashboard-custom-range" class="hidden">
@@ -231,6 +237,19 @@
       <h2>Google Drive Account</h2>
       <p>Opens Drive links with this account index (drive.google.com/drive/u/N/...) so they land in the right Google account — leave blank to open links as-is:</p>
       <input type="number" id="drive-account-index-input" min="0" placeholder="e.g. 2">
+
+      <h2>Google Drive (rclone)</h2>
+      <p>Autofill finds each task's folder here and fills its Creative Link; "Open GD Folder" opens it. Read only, through <a href="https://rclone.org/drive/" data-external>rclone</a> (built into the app). Connect once: Google's sign-in opens in your browser; the app never sees your account.</p>
+      <div id="drive-connect-row">
+        <button id="drive-connect-btn" type="button">Connect Google Drive</button>
+        <span id="drive-connect-status"></span>
+      </div>
+      <div id="drive-rclone-row">
+        <input type="text" id="drive-root-input" placeholder="Root folder: paste the Drive folder URL that holds the …_creatives folders">
+        <input type="text" id="rclone-remote-input" placeholder="remote: gdrive" title="The rclone remote name (rclone listremotes)">
+        <button id="drive-check-btn" type="button">Check</button>
+      </div>
+      <div id="drive-check-status"></div>
 
       <div class="modal-actions">
         <button id="settings-save-btn" class="primary">Save</button>
@@ -311,12 +330,19 @@
         <span id="autofill-figma-note"></span>
       </div>
       <div id="autofill-links-row">
-        <label for="autofill-links">Creative Links — one per task, paired in name order</label>
+        <div id="autofill-links-head">
+          <label for="autofill-links">Creative Links — one per task, paired in name order</label>
+          <span id="autofill-drive-actions">
+            <button id="autofill-find-drive-btn" type="button" data-icon="search" title="Look up each task's folder on Google Drive (rclone) and pair it as the Creative Link">Find on Drive</button>
+            <button id="autofill-open-drive-btn" type="button" data-icon="external" title="Open these tasks' folder on Google Drive: the task's own folder for one task, otherwise the month folder">Open GD Folder</button>
+          </span>
+        </div>
         <textarea id="autofill-links" rows="3" placeholder="Paste links separated by commas, spaces or newlines…" spellcheck="false"></textarea>
         <label id="autofill-drive-order-label" title="Drive returns a shift-selection's links as: the folder you clicked, then the one you shift-clicked, then the rest in order. This puts them back into name order.">
           <input type="checkbox" id="autofill-drive-order-input">
           Links copied from a Drive shift-selection (reorder to name order)
         </label>
+        <div id="autofill-drive-status"></div>
         <div id="autofill-links-warning"></div>
         <div id="autofill-links-pairs"></div>
       </div>
@@ -346,8 +372,10 @@
   <div id="toast-stack" aria-live="polite"></div>
   <script src="notifications-data.js"></script>
   <script src="dashboard-data.js"></script>
+  <script src="performance-data.js"></script>
   <script src="markdown-data.js"></script>
   <script src="drive-links.js"></script>
+  <script src="drive-index.js"></script>
   <script src="ratio-fix.js"></script>
   <script src="task-refs.js"></script>
   <script src="task-search.js"></script>
