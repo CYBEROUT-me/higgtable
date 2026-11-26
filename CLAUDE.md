@@ -447,8 +447,19 @@ right after drive-links) and add
 - Each release gets `release-assets/<version>/` (untracked): numbered
   screenshots plus `slack-message.md`, the Ukrainian notes in Slack markup
   that reference them ("скрін 1, 2").
-- Screenshots are 2880×1720 (1440×860 at 2×) of a **demo harness**, never of
-  real Airtable data (the repo is public): copy `renderer/` to the
+- Since 1.10.0 the owner wants screenshots of **real data** for Slack (it
+  shows the real dashboard numbers). They stay untracked in release-assets and
+  must never be committed or attached to the public GitHub release. Recipe: an
+  Electron launcher that sets `userData` to the HiggTable folder, points
+  `BrowserWindow.loadFile` at the repo, `require`s main.js, then replaces every
+  writing IPC handler (update-records, upload-attachment, rename-file,
+  resize/compress-render, records-cache-write, save-settings, open-external,
+  copy-to-clipboard, …) with one that throws, and runs scripted scenes with
+  `executeJavaScript` + `capturePage()` (`force-device-scale-factor 2`, content
+  1440×860). The owner's own app must be closed; restore their view
+  (`higgtable_view`) afterwards.
+- The demo harness below is for anything that must not show real data:
+- Screenshots are 2880×1720 (1440×860 at 2×) of a **demo harness**: copy `renderer/` to the
   scratchpad, add a `stub.js` before `notifications-data.js` that sets
   `window.app` / `window.airtable` to no-op proxies (`indexTaskFiles` returns
   fake `[name, bytes, path]` entries), and a `seed.js` after `canvas.js` that
