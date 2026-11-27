@@ -7,6 +7,8 @@ const { resolveBinary, probeVideo, renderPlan, compressVideo } = require('./resi
 const resizePlan = require('./renderer/resize-plan');
 const { recordIdsFormula } = require('./renderer/records-sync');
 const { DriveIndex } = require('./drive-rclone');
+const os = require('os');
+const claudeConfig = require('./claude-config');
 
 // GitHub repo hosting releases — used for update checks below.
 const UPDATE_REPO = 'CYBEROUT-me/higgtable';
@@ -264,7 +266,7 @@ function createWindow() {
   win.webContents.once('did-finish-load', () => initAutoUpdate(win));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => { initClaudeAtStartup(); createWindow(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
@@ -409,6 +411,108 @@ ipcMain.handle('records-cache-write', async (_e, key, payload) => {
   await fs.promises.rename(`${file}.tmp`, file);
 });
 ipcMain.handle('get-log-path', () => logFilePath);
+
+// The sync time of an incremental sync that found nothing new: the table file
+// itself isn't rewritten then (34 MB every few minutes), so the time goes to a
+// small sidecar the Claude server (mcp-server.js) reads for its "synced at" line.
+ipcMain.handle('records-cache-touch', async (_e, key, syncedAt) => {
+  if (!(Number(syncedAt) > 0)) throw new Error('Bad syncedAt');
+  await fs.promises.mkdir(recordsCacheDir, { recursive: true });
+  const file = cacheFile(key).replace(/\.json$/, '.meta.json');
+  await fs.promises.writeFile(`${file}.tmp`, JSON.stringify({ syncedAt: Number(syncedAt) }));
+  await fs.promises.rename(`${file}.tmp`, file);
+});
+
+// ── Claude (read-only MCP server) ──────────────────────────────────────
+// Settings → Claude → Connect adds HiggTable to Claude Desktop's config, so
+// Claude can read tasks through mcp-server.js instead of the Airtable connector
+// (the shared Airtable account allows only 10 connections). Only the
+// `higgtable` entry is ever written or removed; see claude-config.js.
+
+function claudeServerEntry() {
+  // Run-as-node loads the script (and the renderer modules it requires)
+  // straight from app.asar; checked on a packaged 1.10 build.
+  return claudeConfig.buildServerEntry({
+    execPath: process.execPath,
+    scriptPath: path.join(app.getAppPath(), 'mcp-server.js'),
+    userDataPath: app.getPath('userData'),
+  });
+}
+
+const claudeConfigFile = () => claudeConfig.claudeDesktopConfigPath(process.platform, process.env, os.homedir());
+
+function readClaudeConfigText(file) {
+  try { return fs.readFileSync(file, 'utf8'); }
+  catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+}
+
+function writeClaudeConfigText(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.higgtable.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
+// Set once at startup: true on Windows when this run follows an update, since
+// the installer most likely closed the server Claude was running.
+let claudeUpdatedSinceLastRun = false;
+
+function claudeStatusNow() {
+  const configPath = claudeConfigFile();
+  const base = { configPath, updatedSinceLastRun: claudeUpdatedSinceLastRun };
+  if (!configPath) return { ...base, status: 'unsupported' };
+  try {
+    return { ...base, status: claudeConfig.entryStatus(readClaudeConfigText(configPath), claudeServerEntry()) };
+  } catch (err) {
+    log(`claude: reading ${configPath} FAILED — ${err.message}`);
+    return { ...base, status: 'invalid' };
+  }
+}
+
+function changeClaudeConfig(transform, label) {
+  const configPath = claudeConfigFile();
+  if (!configPath) return { status: 'unsupported' };
+  const text = readClaudeConfigText(configPath);
+  if (claudeConfig.entryStatus(text, claudeServerEntry()) === 'invalid') {
+    log(`claude: ${label} refused — ${configPath} is not valid JSON`);
+    return { status: 'invalid' };
+  }
+  writeClaudeConfigText(configPath, transform(text));
+  log(`claude: ${label} (${configPath})`);
+  return { status: claudeConfig.entryStatus(readClaudeConfigText(configPath), claudeServerEntry()) };
+}
+
+ipcMain.handle('claude-status', () => claudeStatusNow());
+ipcMain.handle('claude-connect', (_e, selectedDesigner) => {
+  saveSettingsFile({ ...loadSettingsFile(), selectedDesigner: String(selectedDesigner || '') });
+  return changeClaudeConfig(text => claudeConfig.withServerEntry(text, claudeServerEntry()), 'connected');
+});
+ipcMain.handle('claude-disconnect', () => changeClaudeConfig(text => claudeConfig.withoutServerEntry(text), 'disconnected'));
+ipcMain.handle('claude-code-command', () => claudeConfig.claudeCodeCommand(claudeServerEntry()));
+
+// At startup: remember which version ran (to spot an update), and if Claude's
+// entry points at an old location (the app was moved), point it here. Only a
+// packaged app repairs, so `npm start` never redirects the owner's Claude to
+// the dev checkout, and not from a mounted .dmg or a translocated copy, whose
+// path goes away. The entry is never added here, only by Connect.
+function initClaudeAtStartup() {
+  try {
+    let settingsText = null;
+    try { settingsText = fs.readFileSync(settingsPath, 'utf8'); }
+    catch (err) { if (err.code !== 'ENOENT') throw err; }
+    const plan = claudeConfig.planRunVersion(settingsText, app.getVersion(), process.platform);
+    claudeUpdatedSinceLastRun = plan.updatedSinceLastRun;
+    if (plan.settingsToWrite) saveSettingsFile(plan.settingsToWrite);
+    if (!app.isPackaged || claudeConfig.isTransientAppPath(process.execPath)) return;
+    if (claudeStatusNow().status === 'outdated') {
+      changeClaudeConfig(text => claudeConfig.withServerEntry(text, claudeServerEntry()), 'repaired MCP entry path');
+    }
+  } catch (err) {
+    // Never keep the window from opening.
+    log(`claude: startup check FAILED — ${err.message}`);
+  }
+}
+
 
 
 

@@ -77,6 +77,10 @@ airtable.js    Airtable REST client used by main.js: concurrency limiter, 429 re
 resizer.js     Video Resizer engine used by main.js: bundled ffmpeg path, ffprobe
                (cached), one ffmpeg per task, temp -> final renames, cancel.
 preload.js     contextBridge: exposes window.airtable.* and window.app.* to the renderer.
+mcp-server.js  Read-only MCP server for Claude (stdio), launched by Claude Desktop as
+               HiggTable's own executable in ELECTRON_RUN_AS_NODE mode; answers from
+               the records cache. Logic in renderer/mcp-tools.js.
+claude-config.js  Pure helpers for HiggTable's entry in claude_desktop_config.json.
 renderer/
   index.html   All markup, including the modals. The <script> order at the bottom matters.
   styles.css
@@ -133,7 +137,8 @@ right after drive-links) and add
   `~/Library/Application Support/HiggTable/`): `apiKey` (Airtable PAT),
   `workingDirectory`, `driveAccountIndex`, `driveRootFolderId`, `rcloneRemote`,
   `driveCodeApps`, `driveFolderIds`, `autoFixRatio`, `resizeCustomSizes`
-  (last 5 custom resize sizes, e.g. `"1200x628"`). Saved via the
+  (last 5 custom resize sizes, e.g. `"1200x628"`), `selectedDesigner`
+  (Settings → Claude → "I am"), `lastRunVersion` (spots an update). Saved via the
   `save-settings` IPC, which **merges** with the existing contents.
 - `higgtable.log` sits in the same folder. Both main (`log()`) and the
   renderer (`log()` → `window.app.log`) write to it. Timings for every
@@ -403,6 +408,32 @@ right after drive-links) and add
   being retired during 2026: an own client_id is the fix. Upload is not built
   (needs write scope). The old `driveAppFolders` / `driveAppMirrors` keys in
   settings.json are no longer used.
+- **Claude (read-only MCP server)** (`mcp-server.js`, `renderer/mcp-tools.js`,
+  `claude-config.js`; spec `docs/superpowers/specs/2026-11-27-claude-mcp-server-design.md`):
+  the shared Airtable account allows only 10 connections, so designers read
+  tasks in Claude Desktop through HiggTable instead of the Airtable connector.
+  Settings → Claude → Connect writes only `mcpServers.higgtable` into Claude
+  Desktop's config (macOS `~/Library/Application Support/Claude/`, Windows
+  `%APPDATA%\Claude\`), refusing a config that isn't valid JSON; Disconnect
+  removes only that entry; a button copies the `claude mcp add` command for
+  Claude Code. Claude then runs `<HiggTable executable> <app.asar>/mcp-server.js`
+  with `ELECTRON_RUN_AS_NODE=1` and `HIGGTABLE_USER_DATA`, so it works with the
+  app closed, needs no network and never sees the Airtable token (of
+  settings.json it reads only `selectedDesigner`). Tools, all read-only:
+  `find_tasks` (names, then "Brief mentions it"), `get_task` (fields, links,
+  cleaned brief), `my_tasks` (Rework / Ready for Design / In work of "I am",
+  soonest deadline first), `workload` (as the Workload tab). Every answer ends
+  with "From HiggTable · VCP synced …" and warns about tables older than 24 h.
+  The cache payload carries `tableName`; an incremental sync that finds nothing
+  writes only `<key>.meta.json` (`{ syncedAt }`, IPC `records-cache-touch`).
+  A packaged app repairs a moved entry at startup (never adds one, never from a
+  mounted .dmg or a translocated copy); that check can never stop the window opening.
+  `mcp-tools.js` follows the pure-module pattern but is not in index.html.
+  Windows: an update most likely closes the server Claude runs (same exe
+  name), so after an update HiggTable shows "Quit and reopen Claude to
+  reconnect" (accepted by the owner; check on a Windows PC and note here).
+  Reference: first load of the owner's cache (21.5k records) 0.25 s, then
+  instant; a search ~60 ms.
 - **Drive links**: the other Drive feature. Before a
   `drive.google.com/drive/...` link opens, `rewriteDriveLink` inserts
   `/u/<driveAccountIndex>/` (set in Settings, e.g. `2`) so it opens in the

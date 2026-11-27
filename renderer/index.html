@@ -251,6 +251,21 @@
       </div>
       <div id="drive-check-status"></div>
 
+      <h2>Claude</h2>
+      <p>Lets the Claude desktop app read your tasks from HiggTable, without the Airtable connector. Read only: Claude can't change anything in Airtable through it. After connecting, quit and reopen Claude.</p>
+      <div id="claude-card">
+        <div id="claude-designer-row">
+          <label for="claude-designer-select">I am</label>
+          <select id="claude-designer-select"><option value="">— choose —</option></select>
+          <span id="claude-connect-status" class="status-pill"></span>
+        </div>
+        <div id="claude-connect-row">
+          <button id="claude-connect-btn" type="button" class="primary">Connect to Claude Desktop</button>
+          <button id="claude-disconnect-btn" type="button" data-icon="close">Disconnect</button>
+          <button id="claude-code-copy-btn" type="button" data-icon="copy" title="Copies the &quot;claude mcp add&quot; command; paste it in a terminal">Claude Code command</button>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button id="settings-save-btn" class="primary">Save</button>
         <button id="settings-cancel-btn">Cancel</button>

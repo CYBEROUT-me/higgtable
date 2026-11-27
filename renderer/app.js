@@ -284,9 +284,16 @@ function storeTable(name, records, { full = false, startedAt = Date.now(), persi
   const meta = tableSyncMeta[name] || (tableSyncMeta[name] = {});
   meta.syncedAt = startedAt;
   if (full) meta.fullSyncedAt = startedAt;
-  if (!meta.fullSyncedAt || !persist) return;
+  if (!meta.fullSyncedAt) return;
+  if (!persist) {
+    // Nothing changed: record only the sync time, for the Claude server's
+    // "synced at" line (mcp-server.js), without rewriting the whole table.
+    window.app.touchRecordsCache(recordsCacheKey(name), meta.syncedAt)
+      .catch(err => log(`storeTable(${name}): sync-time write FAILED — ${err.message}`));
+    return;
+  }
   window.app.writeRecordsCache(recordsCacheKey(name), {
-    v: RECORDS_CACHE_VERSION, tableId: state.tables[name].id,
+    v: RECORDS_CACHE_VERSION, tableId: state.tables[name].id, tableName: name,
     syncedAt: meta.syncedAt, fullSyncedAt: meta.fullSyncedAt, records,
   }).catch(err => log(`storeTable(${name}): cache write FAILED — ${err.message}`));
 }
@@ -4971,6 +4978,7 @@ function showSettingsModal(forced = false) {
   document.getElementById('rclone-remote-input').value = state.rcloneRemote || '';
   document.getElementById('drive-check-status').textContent = '';
   refreshDriveConnectStatus();
+  refreshClaudeSection();
   document.getElementById('api-key-input').focus();
 }
 
@@ -5413,6 +5421,91 @@ document.getElementById('drive-check-btn').addEventListener('click', async () =>
     btn.disabled = false;
   }
 });
+// ── Claude (read-only MCP server) ──────────────────────────────────────────
+// Settings → Claude adds HiggTable to Claude Desktop's config (main.js,
+// claude-config.js), so Claude reads tasks through mcp-server.js instead of the
+// Airtable connector. "I am" is who my_tasks means by "me"; it is kept apart
+// from the "You:" picker, which is also a filter people point at others.
+
+const CLAUDE_STATUS_TEXT = {
+  connected: ['ok', 'Connected'],
+  'not-connected': ['', 'Not connected'],
+  outdated: ['bad', 'Connected to an old location (reconnect)'],
+  invalid: ['bad', "Claude's config file is not valid JSON; fix or remove it first"],
+  unsupported: ['bad', 'Only on macOS and Windows'],
+};
+
+function showClaudeStatus(status) {
+  const el = document.getElementById('claude-connect-status');
+  const [cls, text] = CLAUDE_STATUS_TEXT[status] || ['bad', status];
+  el.className = `status-pill ${cls}`.trim();
+  el.textContent = text;
+  const linked = status === 'connected' || status === 'outdated';
+  document.getElementById('claude-disconnect-btn').classList.toggle('hidden', !linked);
+  // Not connected yet: Connect is the one thing to do, so it is the primary
+  // button. Once connected it becomes a quiet Reconnect.
+  const btn = document.getElementById('claude-connect-btn');
+  btn.classList.toggle('primary', !linked || status === 'outdated');
+  btn.innerHTML = iconSvg(linked ? 'refresh' : 'link');
+  btn.append(linked ? 'Reconnect' : 'Connect to Claude Desktop');
+}
+
+async function refreshClaudeSection() {
+  const select = document.getElementById('claude-designer-select');
+  const names = [...new Set(Object.values(recordsCache).flat()
+    .map(r => String(r.fields['DES'] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const settings = await window.app.getSettings().catch(() => ({}));
+  const current = settings.selectedDesigner || state.selectedDES || '';
+  if (current && !names.includes(current)) names.unshift(current);
+  select.replaceChildren(new Option('— choose —', ''), ...names.map(n => new Option(n, n)));
+  select.value = current;
+  try {
+    showClaudeStatus((await window.app.claudeStatus()).status);
+  } catch (err) {
+    showClaudeStatus(err.message);
+  }
+}
+
+document.getElementById('claude-designer-select').addEventListener('change', async e => {
+  await window.app.saveSettings({ selectedDesigner: e.target.value });
+});
+document.getElementById('claude-connect-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('claude-connect-btn');
+  btn.disabled = true;
+  try {
+    const { status } = await window.app.claudeConnect(document.getElementById('claude-designer-select').value);
+    showClaudeStatus(status);
+    if (status === 'connected') toast('Connected. Quit and reopen Claude to use it.');
+    else toastError(`Claude: ${(CLAUDE_STATUS_TEXT[status] || [, status])[1]}`);
+  } catch (err) {
+    toastError(`Claude: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('claude-disconnect-btn').addEventListener('click', async () => {
+  try {
+    showClaudeStatus((await window.app.claudeDisconnect()).status);
+  } catch (err) {
+    toastError(`Claude: ${err.message}`);
+  }
+});
+document.getElementById('claude-code-copy-btn').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  try {
+    await window.app.copyToClipboard(await window.app.claudeCodeCommand());
+    flashCopied(btn, 1, 'Copied');
+  } catch (err) {
+    toastError(`Claude: ${err.message}`);
+  }
+});
+// On Windows an update most likely closed the server Claude was running.
+window.app.claudeStatus().then(st => {
+  if (st.updatedSinceLastRun && st.status === 'connected') {
+    toast('HiggTable was updated. Quit and reopen Claude to reconnect.');
+  }
+}).catch(() => {});
+
 document.getElementById('settings-modal').addEventListener('click', e => {
   const link = e.target.closest('a[data-external]');
   if (!link) return;
