@@ -54,6 +54,15 @@ describe('loadSources', () => {
     expect(loadSources(dir).map(s => s.tableName).sort()).toEqual(['VCP Creatives', 'tblB']);
   });
 
+  test('takes the table name from the sidecar when the table file has none yet', () => {
+    const dir = makeUserData();
+    fs.writeFileSync(path.join(dir, 'records-cache', 'appX_tblC.json'), JSON.stringify({
+      v: 1, tableId: 'tblC', syncedAt: SYNCED, fullSyncedAt: SYNCED, records: [],
+    }));
+    fs.writeFileSync(path.join(dir, 'records-cache', 'appX_tblC.meta.json'), JSON.stringify({ syncedAt: META_SYNCED, tableName: 'PLM Creatives' }));
+    expect(loadSources(dir).map(s => s.tableName)).toContain('PLM Creatives');
+  });
+
   test('returns nothing when there is no cache', () => {
     expect(loadSources(fs.mkdtempSync(path.join(os.tmpdir(), 'higgtable-mcp-empty-')))).toEqual([]);
   });

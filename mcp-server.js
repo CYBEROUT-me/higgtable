@@ -35,11 +35,13 @@ function log(message) {
 // its last good copy, since HiggTable may be mid-way through replacing it.
 const parsedFiles = new Map();
 
-function readSidecarSyncedAt(file) {
+// <key>.meta.json: { syncedAt, tableName } from syncs that found nothing new,
+// which don't rewrite the table file itself.
+function readSidecar(file) {
   try {
     const meta = JSON.parse(fs.readFileSync(file.replace(/\.json$/, '.meta.json'), 'utf8'));
-    return Number(meta.syncedAt) || 0;
-  } catch { return 0; }
+    return { syncedAt: Number(meta.syncedAt) || 0, tableName: typeof meta.tableName === 'string' ? meta.tableName : '' };
+  } catch { return { syncedAt: 0, tableName: '' }; }
 }
 
 function isTableFile(name) {
@@ -63,7 +65,7 @@ function loadSources(userDataPath) {
         }
         entry = {
           mtimeMs,
-          source: { tableName: payload.tableName || payload.tableId || name, syncedAt: payload.syncedAt, records: payload.records },
+          source: { tableName: payload.tableName || '', tableId: payload.tableId || name, syncedAt: payload.syncedAt, records: payload.records },
         };
         parsedFiles.set(file, entry);
       }
@@ -71,8 +73,13 @@ function loadSources(userDataPath) {
       log(`cache read failed: ${name}: ${err.message}`);
     }
     if (!entry) return;
-    const syncedAt = Math.max(entry.source.syncedAt, readSidecarSyncedAt(file));
-    sources.push({ ...entry.source, syncedAt });
+    const sidecar = readSidecar(file);
+    const { tableId, ...source } = entry.source;
+    sources.push({
+      ...source,
+      tableName: source.tableName || sidecar.tableName || tableId,
+      syncedAt: Math.max(source.syncedAt, sidecar.syncedAt),
+    });
   });
   return sources.sort((a, b) => String(a.tableName).localeCompare(String(b.tableName)));
 }

@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('app', {
   log:               (msg)         => ipcRenderer.invoke('log', msg),
   readRecordsCache:  (key)         => ipcRenderer.invoke('records-cache-read', key),
   writeRecordsCache: (key, data)   => ipcRenderer.invoke('records-cache-write', key, data),
-  touchRecordsCache: (key, syncedAt) => ipcRenderer.invoke('records-cache-touch', key, syncedAt),
+  touchRecordsCache: (key, syncedAt, tableName) => ipcRenderer.invoke('records-cache-touch', key, syncedAt, tableName),
   claudeStatus:      ()            => ipcRenderer.invoke('claude-status'),
   claudeConnect:     (designer)    => ipcRenderer.invoke('claude-connect', designer),
   claudeDisconnect:  ()            => ipcRenderer.invoke('claude-disconnect'),

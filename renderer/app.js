@@ -288,7 +288,7 @@ function storeTable(name, records, { full = false, startedAt = Date.now(), persi
   if (!persist) {
     // Nothing changed: record only the sync time, for the Claude server's
     // "synced at" line (mcp-server.js), without rewriting the whole table.
-    window.app.touchRecordsCache(recordsCacheKey(name), meta.syncedAt)
+    window.app.touchRecordsCache(recordsCacheKey(name), meta.syncedAt, name)
       .catch(err => log(`storeTable(${name}): sync-time write FAILED — ${err.message}`));
     return;
   }

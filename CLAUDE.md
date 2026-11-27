@@ -425,7 +425,9 @@ right after drive-links) and add
   soonest deadline first), `workload` (as the Workload tab). Every answer ends
   with "From HiggTable · VCP synced …" and warns about tables older than 24 h.
   The cache payload carries `tableName`; an incremental sync that finds nothing
-  writes only `<key>.meta.json` (`{ syncedAt }`, IPC `records-cache-touch`).
+  writes only `<key>.meta.json` (`{ syncedAt, tableName }`, IPC
+  `records-cache-touch`), so a quiet table still gets its name before the 6 h full
+  download rewrites the file. Team guide: `docs/claude-higgtable.md` (Ukrainian).
   A packaged app repairs a moved entry at startup (never adds one, never from a
   mounted .dmg or a translocated copy); that check can never stop the window opening.
   `mcp-tools.js` follows the pure-module pattern but is not in index.html.

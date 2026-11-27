@@ -414,12 +414,14 @@ ipcMain.handle('get-log-path', () => logFilePath);
 
 // The sync time of an incremental sync that found nothing new: the table file
 // itself isn't rewritten then (34 MB every few minutes), so the time goes to a
-// small sidecar the Claude server (mcp-server.js) reads for its "synced at" line.
-ipcMain.handle('records-cache-touch', async (_e, key, syncedAt) => {
+// small sidecar the Claude server (mcp-server.js) reads for its "synced at" line
+// (with the table's name, for files written before the payload carried it).
+ipcMain.handle('records-cache-touch', async (_e, key, syncedAt, tableName) => {
   if (!(Number(syncedAt) > 0)) throw new Error('Bad syncedAt');
   await fs.promises.mkdir(recordsCacheDir, { recursive: true });
   const file = cacheFile(key).replace(/\.json$/, '.meta.json');
-  await fs.promises.writeFile(`${file}.tmp`, JSON.stringify({ syncedAt: Number(syncedAt) }));
+  const meta = { syncedAt: Number(syncedAt), tableName: String(tableName || '') };
+  await fs.promises.writeFile(`${file}.tmp`, JSON.stringify(meta));
   await fs.promises.rename(`${file}.tmp`, file);
 });
 
